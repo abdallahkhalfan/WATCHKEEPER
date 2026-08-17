@@ -1,19 +1,24 @@
 workflows:
-  android-watchkeeper:
+  watchkeeper-android:
     name: WATCHKEEPER Android APK
+    max_build_duration: 120
+    instance_type: mac_mini_m2
 
     environment:
       flutter: stable
 
     scripts:
-      - name: Create Android platform
-        script: flutter create --platforms=android .
+      - name: Set up Flutter SDK
+        script: |
+          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
 
-      - name: Get packages
-        script: flutter pub get
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
 
       - name: Build Android APK
-        script: flutter build apk --release
+        script: |
+          flutter build apk --debug
 
     artifacts:
       - build/app/outputs/flutter-apk/*.apk

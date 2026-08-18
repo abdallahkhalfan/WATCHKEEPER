@@ -108,7 +108,7 @@ class Home extends StatelessWidget{
           const Text('Departure Guard',style:TextStyle(color:Colors.white,fontSize:25,fontWeight:FontWeight.w900)),
           Text('$pending unfinished task${pending==1?'':'s'} before you leave',style:const TextStyle(color:Colors.white70,fontSize:16)),
           const SizedBox(height:18),FilledButton.tonalIcon(onPressed:()=>s.log('Departure Guard checked'),icon:const Icon(Icons.radar),label:const Text('Check my readiness'))
-      ])),
+      ]))),
       Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[
         Expanded(child:_quick(context,Icons.task_alt,'Task','Create anything',()=>showCreate(context,kind:'Task'))),
         const SizedBox(width:12),
@@ -228,12 +228,62 @@ class Settings extends StatelessWidget{
   static const accents=[0xFF6257E8,0xFF0077B6,0xFF00875A,0xFFE85D04,0xFFD63384,0xFF263238];
   @override Widget build(BuildContext context){final s=Store.I;return ListView(children:[
     title('Style & Settings','Make WATCHKEEPER look like yours'),
-    Padding(padding:const EdgeInsets.all(20),child:Card(child:Padding(padding:const EdgeInsets.all(18),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      const Text('Theme',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:12),
-      Wrap(spacing:8,children:['Auto','Light','Dark','Midnight'].map((x)=>ChoiceChip(label:Text(x),selected:s.theme==x,onSelected:(_){s.theme=x;s.save();})).toList()),
-      const SizedBox(height:22),const Text('Accent colour',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:12),
-      Wrap(spacing:12,children:accents.map((x)=>InkWell(onTap:(){s.accent=x;s.save();},child:Container(width:42,height:42,decoration:BoxDecoration(color:Color(x),shape:BoxShape.circle,border:Border.all(color:s.accent==x?Theme.of(context).colorScheme.onSurface:Colors.transparent,width:3)))).toList())
-    ]))),
+    Padding(
+      padding: const EdgeInsets.all(20),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Theme', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: ['Auto', 'Light', 'Dark', 'Midnight']
+                    .map((x) => ChoiceChip(
+                          label: Text(x),
+                          selected: s.theme == x,
+                          onSelected: (_) {
+                            s.theme = x;
+                            s.save();
+                          },
+                        ))
+                    .toList(),
+              ),
+              const SizedBox(height: 22),
+              const Text('Accent colour', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                children: accents
+                    .map((x) => InkWell(
+                          onTap: () {
+                            s.accent = x;
+                            s.save();
+                          },
+                          child: Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: Color(x),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: s.accent == x
+                                    ? Theme.of(context).colorScheme.onSurface
+                                    : Colors.transparent,
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                        ))
+                    .toList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
     Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Card(child:Column(children:[
       const ListTile(leading:Icon(Icons.home_work_outlined),title:Text('Home Safe Zone'),subtitle:Text('Departure protection and geofence settings')),
       const Divider(height:1),const ListTile(leading:Icon(Icons.contact_phone_outlined),title:Text('Emergency contact'),subtitle:Text('Escalation contact for Departure Guard')),

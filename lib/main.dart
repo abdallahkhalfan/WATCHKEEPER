@@ -1,577 +1,276 @@
-import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_timezone/flutter_timezone.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest_all.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
-import 'package:url_launcher/url_launcher.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Notify.instance.init();
-  runApp(const WatchkeeperApp());
+  runApp(const Watchkeeper());
 }
 
-class Notify {
-  Notify._();
-  static final instance = Notify._();
-  final plugin = FlutterLocalNotificationsPlugin();
-
-  Future<void> init() async {
-    tz.initializeTimeZones();
-    try {
-      final zone = await FlutterTimezone.getLocalTimezone();
-      tz.setLocalLocation(tz.getLocation(zone.identifier));
-    } catch (_) {}
-    const settings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    );
-    await plugin.initialize(settings: settings);
-    await plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
-  }
-
-  NotificationDetails get details => const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'watchkeeper_alerts',
-          'WATCHKEEPER alerts',
-          channelDescription: 'Departure and preparation reminders',
-          importance: Importance.max,
-          priority: Priority.high,
-          enableVibration: true,
-          playSound: true,
-        ),
-      );
-
-  Future<void> showNow(String title, String body, {int id = 9000}) => plugin.show(
-        id: id,
-        title: title,
-        body: body,
-        notificationDetails: details,
-      );
-
-  Future<void> schedule(Watch w) async {
-    await plugin.cancel(id: w.noteId);
-    await plugin.cancel(id: w.noteId + 1);
-    final prep = w.when.subtract(Duration(minutes: w.reminderMinutes));
-    if (prep.isAfter(DateTime.now())) {
-      await plugin.zonedSchedule(
-        id: w.noteId,
-        title: '${w.title} is coming up',
-        body: 'Prepare: ${w.items.take(4).map((e) => e.name).join(', ')}',
-        scheduledDate: tz.TZDateTime.from(prep, tz.local),
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: w.id,
-      );
-    }
-    if (w.when.isAfter(DateTime.now())) {
-      await plugin.zonedSchedule(
-        id: w.noteId + 1,
-        title: 'WATCHKEEPER • ${w.title}',
-        body: 'Time to go. Open your checklist before leaving.',
-        scheduledDate: tz.TZDateTime.from(w.when, tz.local),
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: w.id,
-      );
-    }
-  }
-}
-
-class Item {
-  Item(this.name, {this.done = false});
-  String name;
-  bool done;
-  Map<String, dynamic> toJson() => {'name': name, 'done': done};
-  factory Item.fromJson(Map<String, dynamic> j) => Item(j['name'], done: j['done'] ?? false);
-}
-
-class Watch {
-  Watch({
-    required this.id,
-    required this.title,
-    required this.category,
-    required this.when,
-    required this.items,
-    this.reminderMinutes = 30,
-    this.useSafeZone = true,
-    this.enabled = true,
-  });
-  String id, title, category;
-  DateTime when;
-  List<Item> items;
-  int reminderMinutes;
-  bool useSafeZone, enabled;
-
-  int get noteId => id.hashCode.abs() % 1000000;
-  int get doneCount => items.where((e) => e.done).length;
-  bool get complete => items.isNotEmpty && doneCount == items.length;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'category': category,
-        'when': when.toIso8601String(),
-        'items': items.map((e) => e.toJson()).toList(),
-        'reminderMinutes': reminderMinutes,
-        'useSafeZone': useSafeZone,
-        'enabled': enabled,
-      };
-
-  factory Watch.fromJson(Map<String, dynamic> j) => Watch(
-        id: j['id'],
-        title: j['title'],
-        category: j['category'] ?? 'PERSONAL',
-        when: DateTime.parse(j['when']),
-        items: (j['items'] as List? ?? []).map((e) => Item.fromJson(Map<String, dynamic>.from(e))).toList(),
-        reminderMinutes: j['reminderMinutes'] ?? 30,
-        useSafeZone: j['useSafeZone'] ?? true,
-        enabled: j['enabled'] ?? true,
-      );
-}
-
-class WatchkeeperApp extends StatefulWidget {
-  const WatchkeeperApp({super.key});
-  @override
-  State<WatchkeeperApp> createState() => _WatchkeeperAppState();
-}
-
-class _WatchkeeperAppState extends State<WatchkeeperApp> {
-  ThemeMode mode = ThemeMode.system;
-  Color accent = const Color(0xFF635BFF);
-
-  void setAppearance(ThemeMode m, Color c) => setState(() {
-        mode = m;
-        accent = c;
-      });
-
-  @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: 'WATCHKEEPER',
-        debugShowCheckedModeBanner: false,
-        themeMode: mode,
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(seedColor: accent),
-          scaffoldBackgroundColor: const Color(0xFFF4F6FB),
-          cardTheme: const CardThemeData(elevation: 0),
-        ),
-        darkTheme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(seedColor: accent, brightness: Brightness.dark),
-          scaffoldBackgroundColor: const Color(0xFF07111F),
-          cardColor: const Color(0xFF101D30),
-          cardTheme: const CardThemeData(elevation: 0),
-        ),
-        home: Shell(onAppearance: setAppearance),
-      );
-}
-
-class Shell extends StatefulWidget {
-  const Shell({super.key, required this.onAppearance});
-  final void Function(ThemeMode, Color) onAppearance;
-  @override
-  State<Shell> createState() => _ShellState();
-}
-
-class _ShellState extends State<Shell> {
+class Store extends ChangeNotifier {
+  Store._();
+  static final Store I = Store._();
+  SharedPreferences? p;
   int tab = 0;
-  bool loading = true, guardArmed = false, alertOpen = false;
-  double? homeLat, homeLng;
-  double radius = 40;
-  int grace = 60;
-  String contactName = '', contactPhone = '';
-  ThemeMode mode = ThemeMode.system;
-  Color accent = const Color(0xFF635BFF);
-  StreamSubscription<Position>? sub;
-  List<Watch> watches = [];
-  List<String> activity = [];
+  String theme = 'Auto';
+  int accent = 0xFF6257E8;
+  List<Map<String,dynamic>> tasks = [];
+  List<Map<String,dynamic>> events = [];
+  List<Map<String,dynamic>> memories = [];
+  List<Map<String,dynamic>> activity = [];
+  List<Map<String,String>> chat = [
+    {'who':'buddy','text':'Hi — I’m WATCHKEEPER Buddy. Try “add task buy milk”, “add event wedding”, or ask “what is today?”'}
+  ];
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
+  Future<void> load() async {
+    p = await SharedPreferences.getInstance();
+    theme = p!.getString('theme3') ?? 'Auto';
+    accent = p!.getInt('accent3') ?? 0xFF6257E8;
+    tasks = _read('tasks3');
+    events = _read('events3');
+    memories = _read('memories3');
+    activity = _read('activity3');
+    notifyListeners();
   }
-
-  @override
-  void dispose() {
-    sub?.cancel();
-    super.dispose();
+  List<Map<String,dynamic>> _read(String k) {
+    try { return List<Map<String,dynamic>>.from(jsonDecode(p!.getString(k) ?? '[]')); } catch (_) { return []; }
   }
-
-  Future<void> _load() async {
-    final p = await SharedPreferences.getInstance();
-    final raw = p.getString('watches');
-    if (raw != null) {
-      try {
-        watches = (jsonDecode(raw) as List).map((e) => Watch.fromJson(Map<String, dynamic>.from(e))).toList();
-      } catch (_) {}
-    }
-    if (watches.isEmpty) {
-      watches = [
-        Watch(
-          id: 'starter',
-          title: 'Morning Work',
-          category: 'WORK',
-          when: DateTime.now().add(const Duration(hours: 2)),
-          items: [Item('Phone'), Item('Keys'), Item('Wallet'), Item('Water bottle'), Item('Work ID')],
-        )
-      ];
-    }
-    activity = p.getStringList('activity') ?? ['WATCHKEEPER ready'];
-    homeLat = p.getDouble('homeLat');
-    homeLng = p.getDouble('homeLng');
-    radius = p.getDouble('radius') ?? 40;
-    grace = p.getInt('grace') ?? 60;
-    contactName = p.getString('contactName') ?? '';
-    contactPhone = p.getString('contactPhone') ?? '';
-    final savedMode = p.getString('themeMode') ?? 'system';
-    mode = savedMode == 'dark' ? ThemeMode.dark : savedMode == 'light' ? ThemeMode.light : ThemeMode.system;
-    accent = Color(p.getInt('accent') ?? 0xFF635BFF);
-    widget.onAppearance(mode, accent);
-    if (mounted) setState(() => loading = false);
+  Future<void> save() async {
+    await p?.setString('tasks3', jsonEncode(tasks));
+    await p?.setString('events3', jsonEncode(events));
+    await p?.setString('memories3', jsonEncode(memories));
+    await p?.setString('activity3', jsonEncode(activity));
+    await p?.setString('theme3', theme);
+    await p?.setInt('accent3', accent);
+    notifyListeners();
   }
+  void go(int i){ tab=i; notifyListeners(); }
+  void log(String s){ activity.insert(0, {'text':s,'time':DateTime.now().toIso8601String()}); save(); }
+}
 
-  Future<void> _save() async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString('watches', jsonEncode(watches.map((e) => e.toJson()).toList()));
-    await p.setStringList('activity', activity.take(80).toList());
-    if (homeLat != null) await p.setDouble('homeLat', homeLat!);
-    if (homeLng != null) await p.setDouble('homeLng', homeLng!);
-    await p.setDouble('radius', radius);
-    await p.setInt('grace', grace);
-    await p.setString('contactName', contactName);
-    await p.setString('contactPhone', contactPhone);
-    await p.setString('themeMode', mode.name);
-    await p.setInt('accent', accent.value);
-  }
-
-  void _log(String text) {
-    setState(() => activity.insert(0, text));
-    _save();
-  }
-
-  Watch? get active {
-    final enabled = watches.where((w) => w.enabled).toList()..sort((a, b) => a.when.compareTo(b.when));
-    return enabled.isEmpty ? null : enabled.first;
-  }
-
-  Future<bool> _locationPermission() async {
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      _snack('Turn on GPS/Location first.');
-      return false;
-    }
-    var p = await Geolocator.checkPermission();
-    if (p == LocationPermission.denied) p = await Geolocator.requestPermission();
-    if (p == LocationPermission.denied || p == LocationPermission.deniedForever) {
-      _snack('Location permission is required for Safe Zone.');
-      return false;
-    }
-    return true;
-  }
-
-  Future<void> _markHome() async {
-    if (!await _locationPermission()) return;
-    final pos = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-    setState(() {
-      homeLat = pos.latitude;
-      homeLng = pos.longitude;
-    });
-    await _save();
-    _log('Home Safe Zone saved');
-    _snack('Home saved at ${radius.round()} m radius.');
-  }
-
-  Future<void> _toggleGuard() async {
-    if (guardArmed) {
-      await sub?.cancel();
-      setState(() => guardArmed = false);
-      _log('Departure Guard disarmed');
-      return;
-    }
-    if (homeLat == null || homeLng == null) await _markHome();
-    if (homeLat == null || !await _locationPermission()) return;
-    setState(() => guardArmed = true);
-    _log('Departure Guard armed');
-    sub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10),
-    ).listen((pos) {
-      final d = Geolocator.distanceBetween(homeLat!, homeLng!, pos.latitude, pos.longitude);
-      final w = active;
-      if (d >= radius && w != null && w.useSafeZone && !w.complete && !alertOpen) {
-        _departureAlert(w, d);
-      }
+class Watchkeeper extends StatefulWidget {
+  const Watchkeeper({super.key});
+  @override State<Watchkeeper> createState()=>_WatchkeeperState();
+}
+class _WatchkeeperState extends State<Watchkeeper> {
+  bool ready=false;
+  @override void initState(){super.initState(); Store.I.load().then((_){if(mounted)setState(()=>ready=true);});}
+  @override Widget build(BuildContext context){
+    if(!ready) return const MaterialApp(home:Scaffold(body:Center(child:CircularProgressIndicator())));
+    return AnimatedBuilder(animation:Store.I,builder:(context,_){
+      final s=Store.I, c=Color(s.accent);
+      final mode=s.theme=='Dark'||s.theme=='Midnight'?ThemeMode.dark:s.theme=='Light'?ThemeMode.light:ThemeMode.system;
+      return MaterialApp(debugShowCheckedModeBanner:false,themeMode:mode,
+        theme:ThemeData(useMaterial3:true,colorSchemeSeed:c,brightness:Brightness.light,scaffoldBackgroundColor:const Color(0xfff6f7fb)),
+        darkTheme:ThemeData(useMaterial3:true,colorSchemeSeed:c,brightness:Brightness.dark,scaffoldBackgroundColor:const Color(0xff10131a)),
+        home:Shell(key:ValueKey('${s.theme}-${s.accent}')));
     });
   }
+}
 
-  Future<void> _departureAlert(Watch w, double distance) async {
-    alertOpen = true;
-    _log('Departure Guard triggered at ${distance.round()} m');
-    await Notify.instance.showNow('WAIT — checklist incomplete', 'You left Home without confirming everything for ${w.title}.');
-    if (!mounted) return;
-    int left = grace;
-    Timer? timer;
-    final result = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
-        timer ??= Timer.periodic(const Duration(seconds: 1), (t) {
-          if (left <= 1) {
-            t.cancel();
-            Navigator.pop(ctx, 'timeout');
-          } else {
-            left--;
-            setD(() {});
-          }
-        });
-        return AlertDialog(
-          icon: Icon(Icons.warning_amber_rounded, size: 50, color: Theme.of(context).colorScheme.error),
-          title: const Text('WATCHKEEPER ALERT'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('You crossed your Safe Zone with unchecked items:'),
-            const SizedBox(height: 8),
-            ...w.items.where((e) => !e.done).map((e) => ListTile(dense: true, leading: const Icon(Icons.radio_button_unchecked), title: Text(e.name))),
-            Text('$left', style: Theme.of(context).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w900)),
-            const Text('seconds before trusted-contact escalation'),
-          ]),
-          actions: [
-            TextButton(onPressed: () { timer?.cancel(); Navigator.pop(ctx, 'back'); }, child: const Text('I’M GOING BACK')),
-            FilledButton(onPressed: () { timer?.cancel(); Navigator.pop(ctx, 'done'); }, child: const Text('I HAVE EVERYTHING')),
-          ],
-        );
-      }),
-    );
-    timer?.cancel();
-    if (result == 'done') {
-      for (final i in w.items) i.done = true;
-      await _save();
-      _log('${w.title} checklist confirmed');
-    } else if (result == 'timeout') {
-      await _escalate();
-    }
-    alertOpen = false;
-  }
-
-  Future<void> _escalate() async {
-    _log('Escalation timer expired');
-    await Notify.instance.showNow('WATCHKEEPER escalation', contactPhone.isEmpty ? 'No trusted contact is configured.' : 'Opening trusted contact ${contactName.isEmpty ? contactPhone : contactName}.', id: 9911);
-    if (contactPhone.isEmpty) {
-      _contactDialog();
-      return;
-    }
-    final uri = Uri(scheme: 'tel', path: contactPhone);
-    if (await canLaunchUrl(uri)) await launchUrl(uri);
-  }
-
-  Future<void> _editWatch([Watch? old]) async {
-    final w = await Navigator.push<Watch>(context, MaterialPageRoute(builder: (_) => WatchEditor(initial: old)));
-    if (w == null) return;
-    setState(() {
-      final i = old == null ? -1 : watches.indexWhere((e) => e.id == old.id);
-      if (i >= 0) watches[i] = w; else watches.add(w);
-    });
-    await _save();
-    await Notify.instance.schedule(w);
-    _log(old == null ? '${w.title} created' : '${w.title} updated');
-  }
-
-  void _contactDialog() {
-    final n = TextEditingController(text: contactName);
-    final p = TextEditingController(text: contactPhone);
-    showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text('Trusted contact'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: n, decoration: const InputDecoration(labelText: 'Name')),
-        const SizedBox(height: 10),
-        TextField(controller: p, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone number', hintText: '+254...')),
-      ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        FilledButton(onPressed: () { setState(() { contactName = n.text.trim(); contactPhone = p.text.trim(); }); _save(); _log('Trusted contact saved'); Navigator.pop(ctx); }, child: const Text('Save')),
-      ],
-    ));
-  }
-
-  void _safeZoneDialog() {
-    double value = radius;
-    showModalBottomSheet(context: context, showDragHandle: true, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => Padding(
-      padding: const EdgeInsets.fromLTRB(22, 2, 22, 28),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const ListTile(contentPadding: EdgeInsets.zero, leading: Icon(Icons.location_on), title: Text('Home Safe Zone', style: TextStyle(fontWeight: FontWeight.w900)), subtitle: Text('Choose how far from your doorstep WATCHKEEPER should trigger.')),
-        Slider(min: 20, max: 200, divisions: 18, value: value, label: '${value.round()} m', onChanged: (v) => setS(() => value = v)),
-        Text('${value.round()} meters from Home', style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: OutlinedButton.icon(onPressed: _markHome, icon: const Icon(Icons.my_location), label: Text(homeLat == null ? 'Mark Home' : 'Update Home'))),
-          const SizedBox(width: 10),
-          Expanded(child: FilledButton.icon(onPressed: () { setState(() => radius = value); _save(); Navigator.pop(ctx); }, icon: const Icon(Icons.save), label: const Text('Save'))),
-        ])
-      ]),
-    )));
-  }
-
-  void _appearanceDialog() {
-    final colors = [const Color(0xFF635BFF), const Color(0xFF007AFF), const Color(0xFF00A67E), const Color(0xFFFF7A00), const Color(0xFFE91E63), const Color(0xFF7C3AED)];
-    showModalBottomSheet(context: context, showDragHandle: true, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => Padding(
-      padding: const EdgeInsets.fromLTRB(22, 2, 22, 30),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Appearance', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
-        const SizedBox(height: 16),
-        SegmentedButton<ThemeMode>(
-          segments: const [
-            ButtonSegment(value: ThemeMode.light, icon: Icon(Icons.light_mode), label: Text('Light')),
-            ButtonSegment(value: ThemeMode.dark, icon: Icon(Icons.dark_mode), label: Text('Dark')),
-            ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.phone_android), label: Text('Auto')),
-          ],
-          selected: {mode},
-          onSelectionChanged: (s) { setState(() => mode = s.first); setS(() {}); widget.onAppearance(mode, accent); _save(); },
-        ),
-        const SizedBox(height: 22),
-        const Text('Accent color', style: TextStyle(fontWeight: FontWeight.w900)),
-        const SizedBox(height: 10),
-        Wrap(spacing: 12, runSpacing: 12, children: colors.map((c) => InkWell(
-          onTap: () { setState(() => accent = c); setS(() {}); widget.onAppearance(mode, accent); _save(); },
-          child: Container(width: 48, height: 48, decoration: BoxDecoration(shape: BoxShape.circle, color: c, border: Border.all(width: 4, color: accent.value == c.value ? Theme.of(context).colorScheme.onSurface : Colors.transparent)), child: accent.value == c.value ? const Icon(Icons.check, color: Colors.white) : null),
-        )).toList()),
-      ]),
-    )));
-  }
-
-  void _snack(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-
-  @override
-  Widget build(BuildContext context) {
-    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final pages = [_home(), _watchesPage(), _activityPage(), _profilePage()];
+class Shell extends StatelessWidget {
+  const Shell({super.key});
+  @override Widget build(BuildContext context){
+    final s=Store.I;
+    final pages=[const Home(),const Planner(),const Buddy(),const Memories(),const Settings()];
     return Scaffold(
-      body: SafeArea(child: pages[tab]),
-      floatingActionButton: tab < 2 ? FloatingActionButton.extended(onPressed: () => _editWatch(), icon: const Icon(Icons.add), label: const Text('New Watch')) : null,
-      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (i) => setState(() => tab = i), destinations: const [
-        NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
-        NavigationDestination(icon: Icon(Icons.shield_outlined), selectedIcon: Icon(Icons.shield), label: 'Watches'),
-        NavigationDestination(icon: Icon(Icons.timeline_outlined), selectedIcon: Icon(Icons.timeline), label: 'Activity'),
-        NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
+      body:SafeArea(child:pages[s.tab]),
+      bottomNavigationBar:NavigationBar(selectedIndex:s.tab,onDestinationSelected:s.go,destinations:const[
+        NavigationDestination(icon:Icon(Icons.home_outlined),selectedIcon:Icon(Icons.home_rounded),label:'Home'),
+        NavigationDestination(icon:Icon(Icons.calendar_month_outlined),selectedIcon:Icon(Icons.calendar_month),label:'Planner'),
+        NavigationDestination(icon:Icon(Icons.auto_awesome_outlined),selectedIcon:Icon(Icons.auto_awesome),label:'Buddy'),
+        NavigationDestination(icon:Icon(Icons.photo_library_outlined),selectedIcon:Icon(Icons.photo_library),label:'Memories'),
+        NavigationDestination(icon:Icon(Icons.tune),label:'Style'),
       ]),
+      floatingActionButton:s.tab<2?FloatingActionButton.extended(onPressed:()=>showCreate(context),icon:const Icon(Icons.add),label:Text(s.tab==1?'Add':'Quick add')):null,
     );
   }
+}
 
-  Widget _header(String title, String subTitle, IconData icon) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
-    child: Row(children: [CircleAvatar(radius: 25, child: Icon(icon)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)), Text(subTitle, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))]))]),
-  );
+Widget title(String a,String b)=>Padding(padding:const EdgeInsets.fromLTRB(20,18,20,8),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+  Text(a,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900,letterSpacing:-1)),
+  const SizedBox(height:4),Text(b,style:const TextStyle(fontSize:15,color:Colors.grey))
+]));
 
-  Widget _home() {
-    final w = active;
-    return ListView(padding: const EdgeInsets.only(bottom: 110), children: [
-      _header('WATCHKEEPER', 'Your personal departure buddy', Icons.shield_rounded),
-      if (w != null) Padding(padding: const EdgeInsets.all(20), child: Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(gradient: LinearGradient(colors: [accent, Color.lerp(accent, Colors.black, .3)!]), borderRadius: BorderRadius.circular(28), boxShadow: [BoxShadow(color: accent.withValues(alpha: .25), blurRadius: 28, offset: const Offset(0, 14))]),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [const Icon(Icons.radar, color: Colors.white), const SizedBox(width: 8), const Expanded(child: Text('WATCH MODE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 1))), Switch(value: guardArmed, activeThumbColor: Colors.white, onChanged: (_) => _toggleGuard())]),
-          const SizedBox(height: 14), Text(w.title, style: const TextStyle(color: Colors.white, fontSize: 27, fontWeight: FontWeight.w900)), const SizedBox(height: 5), Text(_format(w.when), style: const TextStyle(color: Colors.white70)), const SizedBox(height: 16), LinearProgressIndicator(value: w.items.isEmpty ? 0 : w.doneCount / w.items.length, minHeight: 9, backgroundColor: Colors.white24, color: Colors.white), const SizedBox(height: 7), Text('${w.doneCount}/${w.items.length} items confirmed', style: const TextStyle(color: Colors.white70)),
-        ]),
-      )),
-      Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
-        Expanded(child: _quick(Icons.location_home_rounded, 'Safe Zone', homeLat == null ? 'Set Home' : '${radius.round()} m radius', _safeZoneDialog)), const SizedBox(width: 12), Expanded(child: _quick(Icons.sos_rounded, 'Trusted Contact', contactPhone.isEmpty ? 'Add contact' : (contactName.isEmpty ? contactPhone : contactName), _contactDialog)),
+class Home extends StatelessWidget{
+  const Home({super.key});
+  @override Widget build(BuildContext context){
+    final s=Store.I; final pending=s.tasks.where((e)=>e['done']!=true).length;
+    return ListView(padding:const EdgeInsets.only(bottom:110),children:[
+      title('WATCHKEEPER','Your day. Your things. Your moments.'),
+      Padding(padding:const EdgeInsets.all(20),child:Container(padding:const EdgeInsets.all(24),decoration:BoxDecoration(
+        gradient:LinearGradient(colors:[Theme.of(context).colorScheme.primary,Theme.of(context).colorScheme.tertiary]),
+        borderRadius:BorderRadius.circular(30)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          const Icon(Icons.shield_moon_rounded,color:Colors.white,size:38),const SizedBox(height:18),
+          const Text('Departure Guard',style:TextStyle(color:Colors.white,fontSize:25,fontWeight:FontWeight.w900)),
+          Text('$pending unfinished task${pending==1?'':'s'} before you leave',style:const TextStyle(color:Colors.white70,fontSize:16)),
+          const SizedBox(height:18),FilledButton.tonalIcon(onPressed:()=>s.log('Departure Guard checked'),icon:const Icon(Icons.radar),label:const Text('Check my readiness'))
       ])),
-      if (w != null) ...[
-        const SizedBox(height: 20), Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [Expanded(child: Text('Departure checklist', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))), TextButton(onPressed: () => _editWatch(w), child: const Text('Edit'))])),
-        ...w.items.map((i) => Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4), child: Card(child: CheckboxListTile(value: i.done, onChanged: (v) { setState(() => i.done = v ?? false); _save(); _log('${i.name} ${i.done ? 'confirmed' : 'unchecked'}'); }, title: Text(i.name, style: const TextStyle(fontWeight: FontWeight.w700)), secondary: Icon(_itemIcon(i.name), color: accent))))),
-        Padding(padding: const EdgeInsets.fromLTRB(20, 10, 20, 0), child: FilledButton.icon(onPressed: () { for (final i in w.items) i.done = true; setState(() {}); _save(); _log('${w.title} completed'); }, icon: const Icon(Icons.done_all), label: const Text('Confirm everything'))),
-      ],
-      const SizedBox(height: 18), Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Card(child: ListTile(leading: Icon(guardArmed ? Icons.gps_fixed : Icons.gps_not_fixed, color: guardArmed ? Colors.green : null), title: Text(guardArmed ? 'Departure Guard armed' : 'Departure Guard off'), subtitle: Text(homeLat == null ? 'Set Home to activate.' : 'Triggers at ${radius.round()} m • $grace-second countdown'), trailing: Switch(value: guardArmed, onChanged: (_) => _toggleGuard())))),
+      Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[
+        Expanded(child:_quick(context,Icons.task_alt,'Task','Create anything',()=>showCreate(context,kind:'Task'))),
+        const SizedBox(width:12),
+        Expanded(child:_quick(context,Icons.event_available,'Event','Plan a moment',()=>showCreate(context,kind:'Event'))),
+      ])),
+      Padding(padding:const EdgeInsets.fromLTRB(20,24,20,10),child:Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+        const Text('Today',style:TextStyle(fontSize:23,fontWeight:FontWeight.w900)),
+        TextButton(onPressed:()=>s.go(1),child:const Text('Open planner'))
+      ])),
+      if(s.tasks.isEmpty&&s.events.isEmpty) const Empty(icon:Icons.add_circle_outline,title:'Nothing is pre-filled',sub:'Add your own tasks and events. WATCHKEEPER starts with your life, not fake activity.'),
+      ...s.tasks.take(3).map((e)=>TaskTile(e:e)),
+      ...s.events.take(2).map((e)=>EventTile(e:e)),
+      Padding(padding:const EdgeInsets.fromLTRB(20,20,20,0),child:Card(child:ListTile(
+        leading:const Icon(Icons.auto_awesome),title:const Text('Ask WATCHKEEPER Buddy',style:TextStyle(fontWeight:FontWeight.bold)),
+        subtitle:const Text('Create reminders using simple chat commands.'),trailing:const Icon(Icons.chevron_right),onTap:()=>s.go(2)))),
     ]);
   }
-
-  Widget _quick(IconData icon, String title, String sub, VoidCallback tap) => InkWell(onTap: tap, borderRadius: BorderRadius.circular(22), child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(22)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, size: 30, color: accent), const SizedBox(height: 14), Text(title, style: const TextStyle(fontWeight: FontWeight.w900)), const SizedBox(height: 3), Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant))])));
-
-  Widget _watchesPage() => Column(children: [
-    _header('My Watches', '${watches.length} preparation plans', Icons.shield_outlined),
-    Expanded(child: ListView.builder(padding: const EdgeInsets.fromLTRB(20, 5, 20, 100), itemCount: watches.length, itemBuilder: (_, i) { final w = watches[i]; return Card(margin: const EdgeInsets.only(bottom: 12), child: ListTile(contentPadding: const EdgeInsets.all(14), leading: CircleAvatar(radius: 25, child: Icon(_categoryIcon(w.category))), title: Text(w.title, style: const TextStyle(fontWeight: FontWeight.w900)), subtitle: Text('${_format(w.when)}\n${w.doneCount}/${w.items.length} ready • ${_lead(w.reminderMinutes)}'), isThreeLine: true, trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') _editWatch(w); if (v == 'delete') { Notify.instance.plugin.cancel(id: w.noteId); Notify.instance.plugin.cancel(id: w.noteId + 1); setState(() => watches.remove(w)); _save(); } }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))]), onTap: () => _editWatch(w))); })),
-  ]);
-
-  Widget _activityPage() => ListView(children: [_header('Activity', 'Your preparation history', Icons.timeline), ...activity.map((a) => Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4), child: Card(child: ListTile(leading: const CircleAvatar(child: Icon(Icons.check_circle_outline)), title: Text(a), subtitle: const Text('Stored on this device')))))]);
-
-  Widget _profilePage() => ListView(children: [
-    _header('Profile & Settings', 'Make WATCHKEEPER yours', Icons.person_outline),
-    _setting(Icons.location_on_outlined, 'Home Safe Zone', homeLat == null ? 'Not configured' : '${radius.round()} m radius', _safeZoneDialog),
-    _setting(Icons.contacts_outlined, 'Trusted Contact', contactPhone.isEmpty ? 'Not configured' : '$contactName • $contactPhone', _contactDialog),
-    _setting(Icons.timer_outlined, 'Escalation countdown', '$grace seconds', () => _countdownDialog()),
-    _setting(Icons.palette_outlined, 'Appearance', '${mode.name} theme • custom accent', _appearanceDialog),
-    _setting(Icons.notifications_active_outlined, 'Test notification', 'Check alerts', () => Notify.instance.showNow('WATCHKEEPER test', 'Notifications are working.')),
-    _setting(Icons.security_outlined, 'Privacy', 'Data currently stays on your phone', () => _snack('WATCHKEEPER stores these settings locally on your device.')),
-  ]);
-
-  Widget _setting(IconData i, String t, String s, VoidCallback tap) => Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5), child: Card(child: ListTile(onTap: tap, leading: CircleAvatar(child: Icon(i)), title: Text(t, style: const TextStyle(fontWeight: FontWeight.w800)), subtitle: Text(s), trailing: const Icon(Icons.chevron_right))));
-
-  void _countdownDialog() => showDialog(context: context, builder: (ctx) => SimpleDialog(title: const Text('Escalation countdown'), children: [30, 60, 90, 120].map((s) => RadioListTile<int>(value: s, groupValue: grace, title: Text('$s seconds'), onChanged: (v) { setState(() => grace = v!); _save(); Navigator.pop(ctx); })).toList()));
-
-  String _format(DateTime d) { final h = d.hour % 12 == 0 ? 12 : d.hour % 12; final m = d.minute.toString().padLeft(2, '0'); final a = d.hour >= 12 ? 'PM' : 'AM'; return '${d.day}/${d.month}/${d.year} • $h:$m $a'; }
-  String _lead(int m) => m >= 1440 ? '${m ~/ 1440} day(s) before' : m >= 60 ? '${m ~/ 60} hr before' : '$m min before';
-  IconData _categoryIcon(String c) => c == 'WORK' ? Icons.business_center_outlined : c == 'TRAVEL' ? Icons.flight_takeoff : c == 'EVENT' ? Icons.celebration_outlined : c == 'FAMILY' ? Icons.family_restroom : c == 'SHOPPING' ? Icons.shopping_cart_outlined : Icons.shield_outlined;
-  IconData _itemIcon(String s) { final x = s.toLowerCase(); if (x.contains('phone')) return Icons.phone_android; if (x.contains('key')) return Icons.key; if (x.contains('wallet')) return Icons.account_balance_wallet_outlined; if (x.contains('water')) return Icons.water_drop_outlined; if (x.contains('passport') || x.contains('id')) return Icons.badge_outlined; if (x.contains('laptop')) return Icons.laptop; if (x.contains('gift')) return Icons.card_giftcard; return Icons.inventory_2_outlined; }
+  Widget _quick(BuildContext c,IconData i,String a,String b,VoidCallback f)=>InkWell(onTap:f,borderRadius:BorderRadius.circular(24),child:Ink(
+    padding:const EdgeInsets.all(20),decoration:BoxDecoration(color:Theme.of(c).colorScheme.surface,borderRadius:BorderRadius.circular(24)),
+    child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Icon(i,size:30,color:Theme.of(c).colorScheme.primary),const SizedBox(height:25),Text(a,style:const TextStyle(fontSize:20,fontWeight:FontWeight.w900)),Text(b,style:const TextStyle(color:Colors.grey))])));
 }
 
-class WatchEditor extends StatefulWidget {
-  const WatchEditor({super.key, this.initial});
-  final Watch? initial;
-  @override
-  State<WatchEditor> createState() => _WatchEditorState();
+class Planner extends StatefulWidget{const Planner({super.key});@override State<Planner> createState()=>_PlannerState();}
+class _PlannerState extends State<Planner>{
+  int seg=0;
+  @override Widget build(BuildContext context){final s=Store.I;
+    return Column(children:[title('Planner','Unlimited tasks and real events'),
+      Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:SegmentedButton<int>(segments:const[
+        ButtonSegment(value:0,label:Text('Tasks'),icon:Icon(Icons.check_circle_outline)),
+        ButtonSegment(value:1,label:Text('Events'),icon:Icon(Icons.event_outlined)),
+      ],selected:{seg},onSelectionChanged:(v)=>setState(()=>seg=v.first))),
+      const SizedBox(height:10),
+      Expanded(child:seg==0
+        ?(s.tasks.isEmpty?const Empty(icon:Icons.task_alt,title:'No tasks yet',sub:'Tap Add and create your first task.'):ListView(children:s.tasks.map((e)=>TaskTile(e:e)).toList()))
+        :(s.events.isEmpty?const Empty(icon:Icons.event,title:'No events yet',sub:'Add weddings, work shifts, travel, birthdays or any custom event.'):ListView(children:s.events.map((e)=>EventTile(e:e)).toList())))
+    ]);
+  }
 }
 
-class _WatchEditorState extends State<WatchEditor> {
-  late TextEditingController title;
-  late String category;
-  late DateTime when;
-  late int reminder;
-  late bool safeZone;
-  late List<Item> items;
-  final categories = ['WORK', 'TRAVEL', 'EVENT', 'FAMILY', 'SHOPPING', 'PERSONAL'];
-  final leads = [10, 30, 60, 180, 1440, 2880];
+class TaskTile extends StatelessWidget{
+  final Map<String,dynamic> e; const TaskTile({super.key,required this.e});
+  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(horizontal:20,vertical:6),child:Card(child:CheckboxListTile(
+    value:e['done']==true,onChanged:(v){e['done']=v;Store.I.log('${e['title']} ${v==true?'completed':'reopened'}');},
+    title:Text(e['title']??'',style:const TextStyle(fontWeight:FontWeight.w800)),
+    subtitle:Text([e['category'],e['when'],e['priority']].where((x)=>x!=null&&x.toString().isNotEmpty).join(' • ')),
+    secondary:CircleAvatar(child:Icon(iconFor(e['category']))))));
+}
+class EventTile extends StatelessWidget{
+  final Map<String,dynamic> e; const EventTile({super.key,required this.e});
+  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(horizontal:20,vertical:6),child:Card(child:ListTile(
+    leading:CircleAvatar(child:Icon(iconFor(e['category']))),title:Text(e['title']??'',style:const TextStyle(fontWeight:FontWeight.w800)),
+    subtitle:Text('${e['date']??''}${(e['time']??'').isEmpty?'':' • ${e['time']}'}\n${e['note']??''}'),isThreeLine:(e['note']??'').isNotEmpty,
+    trailing:PopupMenuButton(itemBuilder:(_)=>const[PopupMenuItem(value:'delete',child:Text('Delete'))],onSelected:(v){Store.I.events.remove(e);Store.I.log('${e['title']} deleted');})
+  )));
+}
 
-  @override
-  void initState() {
-    super.initState();
-    final w = widget.initial;
-    title = TextEditingController(text: w?.title ?? '');
-    category = w?.category ?? 'PERSONAL';
-    when = w?.when ?? DateTime.now().add(const Duration(hours: 1));
-    reminder = w?.reminderMinutes ?? 30;
-    safeZone = w?.useSafeZone ?? true;
-    items = (w?.items ?? [Item('Phone'), Item('Keys'), Item('Wallet')]).map((e) => Item(e.name, done: e.done)).toList();
+IconData iconFor(dynamic c){switch(c){case'Work':return Icons.work_rounded;case'Travel':return Icons.flight_takeoff;case'Prayer':return Icons.self_improvement;case'Shopping':return Icons.shopping_bag;case'Family':return Icons.family_restroom;case'Health':return Icons.favorite;default:return Icons.star_rounded;}}
+
+class Buddy extends StatefulWidget{const Buddy({super.key});@override State<Buddy> createState()=>_BuddyState();}
+class _BuddyState extends State<Buddy>{
+  final ctl=TextEditingController();
+  void send(){
+    final t=ctl.text.trim(); if(t.isEmpty)return;
+    Store.I.chat.add({'who':'me','text':t}); ctl.clear();
+    final low=t.toLowerCase(); String reply;
+    if(low.startsWith('add task ')){
+      final x=t.substring(9).trim(); Store.I.tasks.insert(0,{'title':x,'category':'Personal','when':'Anytime','priority':'Normal','done':false});
+      Store.I.log('$x created from Buddy'); reply='Done. I added “$x” to your tasks.';
+    }else if(low.startsWith('add event ')){
+      final x=t.substring(10).trim(); Store.I.events.insert(0,{'title':x,'category':'Event','date':'Not set','time':'','note':'Created with Buddy'});
+      Store.I.log('$x event created from Buddy'); reply='Added “$x”. Open Planner to set its date and details.';
+    }else if(low.contains('what')&&(low.contains('today')||low.contains('task'))){
+      final n=Store.I.tasks.where((e)=>e['done']!=true).length; reply='You currently have $n unfinished task${n==1?'':'s'} and ${Store.I.events.length} event${Store.I.events.length==1?'':'s'}.';
+    }else{
+      reply='I can create things locally. Try “add task carry passport”, “add event baby shower”, or “what are my tasks?”.';
+    }
+    Store.I.chat.add({'who':'buddy','text':reply}); Store.I.save(); setState((){});
   }
+  @override Widget build(BuildContext context)=>Column(children:[
+    title('Buddy','A private, offline WATCHKEEPER command chat'),
+    Expanded(child:ListView(padding:const EdgeInsets.all(16),children:Store.I.chat.map((m){final me=m['who']=='me';return Align(alignment:me?Alignment.centerRight:Alignment.centerLeft,child:Container(
+      constraints:const BoxConstraints(maxWidth:310),margin:const EdgeInsets.symmetric(vertical:5),padding:const EdgeInsets.all(14),
+      decoration:BoxDecoration(color:me?Theme.of(context).colorScheme.primary:Theme.of(context).colorScheme.surfaceContainerHighest,borderRadius:BorderRadius.circular(20)),
+      child:Text(m['text']!,style:TextStyle(color:me?Theme.of(context).colorScheme.onPrimary:null))));}).toList())),
+    SafeArea(top:false,child:Padding(padding:const EdgeInsets.all(12),child:Row(children:[Expanded(child:TextField(controller:ctl,onSubmitted:(_)=>send(),decoration:const InputDecoration(hintText:'Tell WATCHKEEPER something…',border:OutlineInputBorder()))),const SizedBox(width:8),IconButton.filled(onPressed:send,icon:const Icon(Icons.send_rounded))])))
+  ]);
+}
 
-  void _addItem() {
-    final c = TextEditingController();
-    showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Add essential item'), content: TextField(controller: c, autofocus: true, decoration: const InputDecoration(hintText: 'Water bottle')), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')), FilledButton(onPressed: () { if (c.text.trim().isNotEmpty) setState(() => items.add(Item(c.text.trim()))); Navigator.pop(ctx); }, child: const Text('Add'))]));
+class Memories extends StatelessWidget{
+  const Memories({super.key});
+  Future<void> capture(BuildContext context,ImageSource src,bool video) async{
+    final p=ImagePicker(); final XFile? f=video?await p.pickVideo(source:src,maxDuration:const Duration(minutes:2)):await p.pickImage(source:src,imageQuality:82);
+    if(f==null)return;
+    Store.I.memories.insert(0,{'path':f.path,'video':video,'caption':video?'Video memory':'Photo memory','time':DateTime.now().toIso8601String()});
+    Store.I.log('${video?'Video':'Photo'} memory captured');
   }
+  @override Widget build(BuildContext context){final s=Store.I;return Column(children:[
+    title('Memories','Capture what you do not want to forget'),
+    Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[
+      Expanded(child:FilledButton.icon(onPressed:()=>capture(context,ImageSource.camera,false),icon:const Icon(Icons.photo_camera),label:const Text('Photo'))),
+      const SizedBox(width:8),Expanded(child:FilledButton.tonalIcon(onPressed:()=>capture(context,ImageSource.camera,true),icon:const Icon(Icons.videocam),label:const Text('Video'))),
+      const SizedBox(width:8),IconButton.filledTonal(onPressed:()=>capture(context,ImageSource.gallery,false),icon:const Icon(Icons.photo_library))
+    ])),const SizedBox(height:12),
+    Expanded(child:s.memories.isEmpty?const Empty(icon:Icons.photo_camera_back_outlined,title:'Your memory wall is empty',sub:'Take a photo, record a short video, or choose a picture from your phone.'):GridView.builder(
+      padding:const EdgeInsets.all(16),gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:2,crossAxisSpacing:10,mainAxisSpacing:10),itemCount:s.memories.length,itemBuilder:(c,i){
+        final m=s.memories[i], video=m['video']==true, path=m['path'] as String;
+        return ClipRRect(borderRadius:BorderRadius.circular(22),child:Stack(fit:StackFit.expand,children:[
+          if(!video&&File(path).existsSync()) Image.file(File(path),fit:BoxFit.cover) else Container(color:Theme.of(c).colorScheme.surfaceContainerHighest,child:Icon(video?Icons.play_circle:Icons.broken_image,size:50)),
+          Align(alignment:Alignment.bottomCenter,child:Container(width:double.infinity,padding:const EdgeInsets.all(10),color:Colors.black54,child:Text(m['caption']??'Memory',style:const TextStyle(color:Colors.white,fontWeight:FontWeight.bold))))
+        ]));
+      }))
+  ]);}
+}
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.initial == null ? 'New Watch' : 'Edit Watch')),
-    body: ListView(padding: const EdgeInsets.all(20), children: [
-      TextField(controller: title, decoration: const InputDecoration(labelText: 'Watch title', hintText: 'Wedding, Work, Baby shower...', border: OutlineInputBorder(), prefixIcon: Icon(Icons.edit_outlined))),
-      const SizedBox(height: 14),
-      DropdownButtonFormField<String>(initialValue: category, decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder(), prefixIcon: Icon(Icons.category_outlined)), items: categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (v) => setState(() => category = v!)),
-      const SizedBox(height: 10),
-      Card(child: ListTile(leading: const Icon(Icons.event), title: const Text('Date and time'), subtitle: Text(_date(when)), trailing: const Icon(Icons.edit_calendar), onTap: () async { final d = await showDatePicker(context: context, initialDate: when, firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 3650))); if (d == null || !mounted) return; final t = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(when)); if (t != null) setState(() => when = DateTime(d.year, d.month, d.day, t.hour, t.minute)); })),
-      const SizedBox(height: 10),
-      DropdownButtonFormField<int>(initialValue: reminder, decoration: const InputDecoration(labelText: 'Prepare reminder', border: OutlineInputBorder(), prefixIcon: Icon(Icons.notifications_outlined)), items: leads.map((m) => DropdownMenuItem(value: m, child: Text(_lead(m)))).toList(), onChanged: (v) => setState(() => reminder = v!)),
-      SwitchListTile(value: safeZone, onChanged: (v) => setState(() => safeZone = v), title: const Text('Use Home Departure Guard'), subtitle: const Text('Trigger checklist after crossing the Safe Zone.')),
-      Row(children: [Expanded(child: Text('Essential checklist', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900))), TextButton.icon(onPressed: _addItem, icon: const Icon(Icons.add), label: const Text('Add'))]),
-      ...items.asMap().entries.map((e) => Card(child: ListTile(title: Text(e.value.name), leading: const Icon(Icons.drag_indicator), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => setState(() => items.removeAt(e.key)))))),
-      const SizedBox(height: 18),
-      FilledButton.icon(style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)), onPressed: () { if (title.text.trim().isEmpty) return; Navigator.pop(context, Watch(id: widget.initial?.id ?? DateTime.now().millisecondsSinceEpoch.toString(), title: title.text.trim(), category: category, when: when, items: items, reminderMinutes: reminder, useSafeZone: safeZone, enabled: widget.initial?.enabled ?? true)); }, icon: const Icon(Icons.shield), label: Text(widget.initial == null ? 'CREATE WATCH' : 'SAVE WATCH')),
-    ]),
-  );
+class Settings extends StatelessWidget{
+  const Settings({super.key});
+  static const accents=[0xFF6257E8,0xFF0077B6,0xFF00875A,0xFFE85D04,0xFFD63384,0xFF263238];
+  @override Widget build(BuildContext context){final s=Store.I;return ListView(children:[
+    title('Style & Settings','Make WATCHKEEPER look like yours'),
+    Padding(padding:const EdgeInsets.all(20),child:Card(child:Padding(padding:const EdgeInsets.all(18),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      const Text('Theme',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:12),
+      Wrap(spacing:8,children:['Auto','Light','Dark','Midnight'].map((x)=>ChoiceChip(label:Text(x),selected:s.theme==x,onSelected:(_){s.theme=x;s.save();})).toList()),
+      const SizedBox(height:22),const Text('Accent colour',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:12),
+      Wrap(spacing:12,children:accents.map((x)=>InkWell(onTap:(){s.accent=x;s.save();},child:Container(width:42,height:42,decoration:BoxDecoration(color:Color(x),shape:BoxShape.circle,border:Border.all(color:s.accent==x?Theme.of(context).colorScheme.onSurface:Colors.transparent,width:3)))).toList())
+    ]))),
+    Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Card(child:Column(children:[
+      const ListTile(leading:Icon(Icons.home_work_outlined),title:Text('Home Safe Zone'),subtitle:Text('Departure protection and geofence settings')),
+      const Divider(height:1),const ListTile(leading:Icon(Icons.contact_phone_outlined),title:Text('Emergency contact'),subtitle:Text('Escalation contact for Departure Guard')),
+      const Divider(height:1),ListTile(leading:const Icon(Icons.history),title:const Text('Real activity'),subtitle:Text('${s.activity.length} actions recorded'))
+    ]))),
+    Padding(padding:const EdgeInsets.all(20),child:Text('WATCHKEEPER 3.0 • Tasks • Events • Buddy • Memories • Themes',textAlign:TextAlign.center,style:const TextStyle(color:Colors.grey)))
+  ]);}
+}
 
-  String _date(DateTime d) { final h = d.hour % 12 == 0 ? 12 : d.hour % 12; final m = d.minute.toString().padLeft(2, '0'); return '${d.day}/${d.month}/${d.year} • $h:$m ${d.hour >= 12 ? 'PM' : 'AM'}'; }
-  String _lead(int m) => m == 2880 ? '2 days before' : m == 1440 ? '1 day before' : m >= 60 ? '${m ~/ 60} hours before' : '$m minutes before';
+class Empty extends StatelessWidget{
+  final IconData icon; final String title,sub; const Empty({super.key,required this.icon,required this.title,required this.sub});
+  @override Widget build(BuildContext context)=>Center(child:Padding(padding:const EdgeInsets.all(35),child:Column(mainAxisSize:MainAxisSize.min,children:[
+    Icon(icon,size:64,color:Theme.of(context).colorScheme.primary),const SizedBox(height:14),Text(title,textAlign:TextAlign.center,style:const TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:6),Text(sub,textAlign:TextAlign.center,style:const TextStyle(color:Colors.grey,fontSize:15))
+  ])));
+}
+
+Future<void> showCreate(BuildContext context,{String? kind}) async{
+  String type=kind??'Task',category='Personal',priority='Normal'; final name=TextEditingController(),note=TextEditingController();
+  DateTime date=DateTime.now(); TimeOfDay time=TimeOfDay.now();
+  await showModalBottomSheet(context:context,isScrollControlled:true,showDragHandle:true,builder:(ctx)=>StatefulBuilder(builder:(ctx,set)=>Padding(
+    padding:EdgeInsets.fromLTRB(20,0,20,MediaQuery.of(ctx).viewInsets.bottom+20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      Text('Create $type',style:const TextStyle(fontSize:27,fontWeight:FontWeight.w900)),
+      const SizedBox(height:14),SegmentedButton<String>(segments:const[ButtonSegment(value:'Task',label:Text('Task')),ButtonSegment(value:'Event',label:Text('Event'))],selected:{type},onSelectionChanged:(v)=>set(()=>type=v.first)),
+      const SizedBox(height:14),TextField(controller:name,autofocus:true,decoration:InputDecoration(labelText:type=='Task'?'What do you need to do?':'Event name',border:const OutlineInputBorder())),
+      const SizedBox(height:12),DropdownButtonFormField<String>(initialValue:category,decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),items:['Personal','Work','Travel','Prayer','Shopping','Family','Health','Event'].map((x)=>DropdownMenuItem(value:x,child:Text(x))).toList(),onChanged:(v)=>set(()=>category=v!)),
+      const SizedBox(height:12),if(type=='Task')DropdownButtonFormField<String>(initialValue:priority,decoration:const InputDecoration(labelText:'Priority',border:OutlineInputBorder()),items:['Low','Normal','High','Urgent'].map((x)=>DropdownMenuItem(value:x,child:Text(x))).toList(),onChanged:(v)=>priority=v!),
+      if(type=='Event')...[const SizedBox(height:12),TextField(controller:note,maxLines:2,decoration:const InputDecoration(labelText:'Notes / what to carry',border:OutlineInputBorder()))],
+      const SizedBox(height:12),Row(children:[
+        Expanded(child:OutlinedButton.icon(onPressed:()async{final d=await showDatePicker(context:ctx,firstDate:DateTime.now().subtract(const Duration(days:365)),lastDate:DateTime.now().add(const Duration(days:3650)),initialDate:date);if(d!=null)set(()=>date=d);},icon:const Icon(Icons.calendar_today),label:Text('${date.day}/${date.month}/${date.year}'))),
+        const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:()async{final t=await showTimePicker(context:ctx,initialTime:time);if(t!=null)set(()=>time=t);},icon:const Icon(Icons.schedule),label:Text(time.format(ctx))))
+      ]),
+      const SizedBox(height:18),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:(){
+        final n=name.text.trim();if(n.isEmpty)return;
+        if(type=='Task')Store.I.tasks.insert(0,{'title':n,'category':category,'when':'${date.day}/${date.month} • ${time.format(ctx)}','priority':priority,'done':false});
+        else Store.I.events.insert(0,{'title':n,'category':category,'date':'${date.day}/${date.month}/${date.year}','time':time.format(ctx),'note':note.text.trim()});
+        Store.I.log('$type “$n” created');Navigator.pop(ctx);
+      },icon:const Icon(Icons.check),label:Text('Save $type'))),const SizedBox(height:8)
+    ]))
+  )));
 }

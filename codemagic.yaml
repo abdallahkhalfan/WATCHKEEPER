@@ -3,8 +3,10 @@ workflows:
     name: WATCHKEEPER Android APK
     instance_type: mac_mini_m2
     max_build_duration: 60
+
     environment:
       flutter: stable
+
     scripts:
       - name: Recreate modern Android project
         script: |
@@ -12,11 +14,39 @@ workflows:
           flutter create --platforms=android .
           rm -rf test
           rm -f analysis_options.yaml
+
+      - name: Enable Android desugaring
+        script: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          gradle = Path("android/app/build.gradle.kts")
+          text = gradle.read_text()
+
+          text = text.replace(
+              "compileOptions {",
+              """compileOptions {
+                  isCoreLibraryDesugaringEnabled = true"""
+          )
+
+          if 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")' not in text:
+              text += """
+
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+          }
+          """
+
+          gradle.write_text(text)
+          PY
+
       - name: Get Flutter packages
         script: |
           flutter pub get
+
       - name: Build WATCHKEEPER 3
         script: |
           flutter build apk --debug
+
     artifacts:
       - build/app/outputs/flutter-apk/*.apk

@@ -1,12 +1,10 @@
 workflows:
   watchkeeper-android:
-    name: WATCHKEEPER Android APK
+    name: WATCHKEEPER 4 Android APK
     instance_type: mac_mini_m2
     max_build_duration: 60
-
     environment:
       flutter: stable
-
     scripts:
       - name: Recreate modern Android project
         script: |
@@ -15,38 +13,48 @@ workflows:
           rm -rf test
           rm -f analysis_options.yaml
 
-      - name: Enable Android desugaring
+      - name: Configure WATCHKEEPER Android permissions and alarms
         script: |
           python3 <<'PY'
           from pathlib import Path
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          text = manifest.read_text()
+          perms = '''    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+              <uses-permission android:name="android.permission.CAMERA" />
+          '''
+          text = text.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n' + perms)
+          receivers = '''
+                  <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+                  <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                          <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                          <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+                      </intent-filter>
+                  </receiver>
+          '''
+          text = text.replace('</application>', receivers + '\n    </application>')
+          manifest.write_text(text)
 
-          gradle = Path("android/app/build.gradle.kts")
-          text = gradle.read_text()
-
-          text = text.replace(
-              "compileOptions {",
-              """compileOptions {
-                  isCoreLibraryDesugaringEnabled = true"""
-          )
-
-          if 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")' not in text:
-              text += """
-
-          dependencies {
-              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-          }
-          """
-
-          gradle.write_text(text)
+          gradle = Path('android/app/build.gradle.kts')
+          g = gradle.read_text()
+          if 'isCoreLibraryDesugaringEnabled = true' not in g:
+              g = g.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true')
+          if 'coreLibraryDesugaring(' not in g:
+              g += '''\n\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'''
+          gradle.write_text(g)
           PY
 
       - name: Get Flutter packages
-        script: |
-          flutter pub get
-
-      - name: Build WATCHKEEPER 3
-        script: |
-          flutter build apk --debug
-
+        script: flutter pub get
+      - name: Build WATCHKEEPER 4
+        script: flutter build apk --debug
     artifacts:
       - build/app/outputs/flutter-apk/*.apk

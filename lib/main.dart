@@ -1,6 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -8,109 +7,1554 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest_all.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:url_launcher/url_launcher.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Firebase.initializeApp();
-  await Alerts.i.init();
-  runApp(const Watchkeeper());
+  await Alerts.instance.init();
+
+  runApp(const WatchkeeperApp());
 }
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
 
 class Alerts {
-  Alerts._(); static final i=Alerts._();
-  final p=FlutterLocalNotificationsPlugin();
+  Alerts._();
+
+  static final Alerts instance = Alerts._();
+
+  final FlutterLocalNotificationsPlugin plugin =
+      FlutterLocalNotificationsPlugin();
+
   Future<void> init() async {
     tz.initializeTimeZones();
-    try { final z=await FlutterTimezone.getLocalTimezone(); tz.setLocalLocation(tz.getLocation(z.name)); } catch(_){}
-    await p.initialize(settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
-    await p.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.requestNotificationsPermission();
-  }
-  Future<void> test() => p.show(id:9999,title:'WATCHKEEPER',body:'Notifications are working.',notificationDetails:const NotificationDetails(android:AndroidNotificationDetails('wk_alerts','WATCHKEEPER Alerts',importance:Importance.max,priority:Priority.high,enableVibration:true)));
-  Future<void> exactPermission() async => p.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.requestExactAlarmsPermission();
-  Future<void> schedule(int id,String title,DateTime when,int before) async {
-    final d=when.subtract(Duration(minutes:before)); if(d.isBefore(DateTime.now())) return;
-    const n=NotificationDetails(android:AndroidNotificationDetails('wk_reminders','WATCHKEEPER Reminders',channelDescription:'Tasks and event reminders',importance:Importance.max,priority:Priority.high,enableVibration:true));
+
     try {
-      await p.zonedSchedule(id:id,title:'WATCHKEEPER Reminder',body:title,scheduledDate:tz.TZDateTime.from(d,tz.local),notificationDetails:n,androidScheduleMode:AndroidScheduleMode.exactAllowWhileIdle);
-    } catch(_) {
-      await p.zonedSchedule(id:id,title:'WATCHKEEPER Reminder',body:title,scheduledDate:tz.TZDateTime.from(d,tz.local),notificationDetails:n,androidScheduleMode:AndroidScheduleMode.inexactAllowWhileIdle);
+      final zone = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(zone.identifier));
+    } catch (_) {
+      // timezone package will use its default if device timezone lookup fails.
+    }
+
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    const settings = InitializationSettings(
+      android: androidSettings,
+    );
+
+    await plugin.initialize(settings: settings);
+
+    final android =
+        plugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+
+    await android?.requestNotificationsPermission();
+  }
+
+  Future<void> test() async {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'watchkeeper_reminders',
+        'WATCHKEEPER Reminders',
+        channelDescription: 'Tasks, events and WATCHKEEPER reminders',
+        importance: Importance.max,
+        priority: Priority.high,
+      ),
+    );
+
+    await plugin.show(
+      id: 999,
+      title: 'WATCHKEEPER',
+      body: 'Notifications are working.',
+      notificationDetails: details,
+    );
+  }
+
+  Future<void> schedule({
+    required int id,
+    required String title,
+    required DateTime when,
+    required int minutesBefore,
+  }) async {
+    final notificationTime =
+        when.subtract(Duration(minutes: minutesBefore));
+
+    if (notificationTime.isBefore(DateTime.now())) {
+      return;
+    }
+
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'watchkeeper_reminders',
+        'WATCHKEEPER Reminders',
+        channelDescription: 'Tasks, events and WATCHKEEPER reminders',
+        importance: Importance.max,
+        priority: Priority.high,
+      ),
+    );
+
+    final scheduled = tz.TZDateTime.from(notificationTime, tz.local);
+
+    await plugin.zonedSchedule(
+      id: id,
+      title: 'WATCHKEEPER',
+      body: title,
+      scheduledDate: scheduled,
+      notificationDetails: details,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  Future<void> cancel(int id) async {
+    await plugin.cancel(id: id);
+  }
+}
+
+// ============================================================
+// APP
+// ============================================================
+
+class WatchkeeperApp extends StatefulWidget {
+  const WatchkeeperApp({super.key});
+
+  @override
+  State<WatchkeeperApp> createState() => _WatchkeeperAppState();
+}
+
+class _WatchkeeperAppState extends State<WatchkeeperApp> {
+  ThemeMode _themeMode = ThemeMode.system;
+
+  void changeTheme(ThemeMode mode) {
+    setState(() => _themeMode = mode);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF6750A4),
+      brightness: Brightness.light,
+    );
+
+    final darkScheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF8C7AE6),
+      brightness: Brightness.dark,
+    );
+
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'WATCHKEEPER',
+      themeMode: _themeMode,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: scheme,
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: darkScheme,
+      ),
+      home: AuthGate(
+        onThemeChanged: changeTheme,
+      ),
+    );
+  }
+}
+
+// ============================================================
+// AUTHENTICATION
+// ============================================================
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({
+    super.key,
+    required this.onThemeChanged,
+  });
+
+  final ValueChanged<ThemeMode> onThemeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+
+        if (snapshot.data == null) {
+          return const LoginScreen();
+        }
+
+        return HomeScreen(
+          onThemeChanged: onThemeChanged,
+        );
+      },
+    );
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final nameController = TextEditingController();
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+
+  bool register = false;
+  bool busy = false;
+  String error = '';
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    final email = emailController.text.trim();
+    final password = passwordController.text;
+
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => error = 'Enter your email and password.');
+      return;
+    }
+
+    setState(() {
+      busy = true;
+      error = '';
+    });
+
+    try {
+      if (register) {
+        final result =
+            await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+
+        final name = nameController.text.trim();
+
+        if (name.isNotEmpty) {
+          await result.user?.updateDisplayName(name);
+        }
+
+        if (result.user != null) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(result.user!.uid)
+              .set({
+            'name': name,
+            'email': email,
+            'createdAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      } else {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        error = e.message ?? 'Authentication failed.';
+      });
+    } catch (e) {
+      setState(() {
+        error = 'Something went wrong: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => busy = false);
+      }
     }
   }
-}
 
-class Model extends ChangeNotifier {
-  SharedPreferences? sp; int tab=0; String theme='Auto'; int accent=0xff6750a4;
-  List<Map<String,dynamic>> tasks=[],events=[],memories=[],history=[];
-  String contact='',phone=''; double? homeLat,homeLng; double radius=50; bool guard=false; StreamSubscription<Position>? stream;
-  Future<void> load() async {
-    sp=await SharedPreferences.getInstance(); theme=sp!.getString('theme')??'Auto'; accent=sp!.getInt('accent')??0xff6750a4;
-    contact=sp!.getString('contact')??''; phone=sp!.getString('phone')??''; homeLat=sp!.getDouble('homeLat'); homeLng=sp!.getDouble('homeLng'); radius=sp!.getDouble('radius')??50;
-    tasks=_get('tasks'); events=_get('events'); memories=_get('memories'); history=_get('history');
+  Future<void> resetPassword() async {
+    final email = emailController.text.trim();
+
+    if (email.isEmpty) {
+      showMessage(context, 'Enter your email first.');
+      return;
+    }
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+
+      if (mounted) {
+        showMessage(context, 'Password reset email sent.');
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        showMessage(context, e.message ?? 'Could not send reset email.');
+      }
+    }
   }
-  List<Map<String,dynamic>> _get(String k){try{return (jsonDecode(sp!.getString(k)??'[]') as List).map((x)=>Map<String,dynamic>.from(x)).toList();}catch(_){return[];}}
-  Future<void> save() async {await sp!.setString('theme',theme);await sp!.setInt('accent',accent);await sp!.setString('contact',contact);await sp!.setString('phone',phone);await sp!.setDouble('radius',radius);if(homeLat!=null)await sp!.setDouble('homeLat',homeLat!);if(homeLng!=null)await sp!.setDouble('homeLng',homeLng!);await sp!.setString('tasks',jsonEncode(tasks));await sp!.setString('events',jsonEncode(events));await sp!.setString('memories',jsonEncode(memories));await sp!.setString('history',jsonEncode(history.take(100).toList()));notifyListeners();}
-  void log(String s){history.insert(0,{'text':s,'time':DateTime.now().toIso8601String()});save();}
-  void go(int x){tab=x;notifyListeners();}
-  Future<bool> locate() async {if(!await Geolocator.isLocationServiceEnabled())return false;var p=await Geolocator.checkPermission();if(p==LocationPermission.denied)p=await Geolocator.requestPermission();return p!=LocationPermission.denied&&p!=LocationPermission.deniedForever;}
-  Future<bool> markHome() async {if(!await locate())return false;final p=await Geolocator.getCurrentPosition();homeLat=p.latitude;homeLng=p.longitude;log('Home Safe Zone marked');return true;}
-  Future<void> toggleGuard(BuildContext c) async {
-    if(guard){await stream?.cancel();guard=false;log('Departure Guard disarmed');return;}
-    if(homeLat==null&&!await markHome()){if(c.mounted)msg(c,'Enable GPS and Location permission.');return;}
-    if(!await locate())return;guard=true;log('Departure Guard armed');
-    stream=Geolocator.getPositionStream(locationSettings:const LocationSettings(distanceFilter:10,accuracy:LocationAccuracy.high)).listen((p) async {
-      if(!guard||homeLat==null)return;final d=Geolocator.distanceBetween(homeLat!,homeLng!,p.latitude,p.longitude);final open=tasks.where((x)=>x['done']!=true).toList();
-      if(d>=radius&&open.isNotEmpty&&c.mounted){await Alerts.i.test();guard=false;notifyListeners();await showDialog(context:c,builder:(x)=>AlertDialog(icon:const Icon(Icons.warning_amber_rounded,size:55),title:const Text('CHECK BEFORE YOU GO'),content:Text('You are ${d.round()} m from Home.\\n\\nUnfinished:\\n${open.take(6).map((e)=>'• ${e['title']}').join('\\n')}'),actions:[FilledButton(onPressed:()=>Navigator.pop(x),child:const Text('I checked'))]));}
-    }); notifyListeners();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 430),
+              child: Column(
+                children: [
+                  Container(
+                    width: 86,
+                    height: 86,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Theme.of(context).colorScheme.primary,
+                          Theme.of(context).colorScheme.tertiary,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(26),
+                    ),
+                    child: const Icon(
+                      Icons.shield_rounded,
+                      size: 46,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'WATCHKEEPER',
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  const Text(
+                    'Remember more • Miss less • Stay connected',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 30),
+
+                  if (register) ...[
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Your name',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.person),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+
+                  TextField(
+                    controller: emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'Email',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.email),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  TextField(
+                    controller: passwordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Password',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.lock),
+                    ),
+                  ),
+
+                  if (error.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        error,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+
+                  const SizedBox(height: 16),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: busy ? null : submit,
+                      child: Padding(
+                        padding: const EdgeInsets.all(15),
+                        child: busy
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Text(
+                                register
+                                    ? 'Create WATCHKEEPER account'
+                                    : 'Sign in',
+                              ),
+                      ),
+                    ),
+                  ),
+
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () {
+                            setState(() {
+                              register = !register;
+                              error = '';
+                            });
+                          },
+                    child: Text(
+                      register
+                          ? 'Already registered? Sign in'
+                          : 'Create WATCHKEEPER account',
+                    ),
+                  ),
+
+                  if (!register)
+                    TextButton(
+                      onPressed: resetPassword,
+                      child: const Text('Forgot password?'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
-class Watchkeeper extends StatefulWidget{const Watchkeeper({super.key});@override State<Watchkeeper>createState()=>_WatchkeeperState();}
-class _WatchkeeperState extends State<Watchkeeper>{
-  final m=Model();bool ready=false;
-  @override void initState(){super.initState();m.load().then((_){if(mounted)setState(()=>ready=true);});}
-  @override Widget build(BuildContext c){if(!ready)return const MaterialApp(home:Scaffold(body:Center(child:CircularProgressIndicator())));
-    return AnimatedBuilder(animation:m,builder:(_,__)=>MaterialApp(debugShowCheckedModeBanner:false,title:'WATCHKEEPER',themeMode:m.theme=='Light'?ThemeMode.light:m.theme=='Dark'||m.theme=='Midnight'?ThemeMode.dark:ThemeMode.system,theme:ThemeData(useMaterial3:true,colorSchemeSeed:Color(m.accent),scaffoldBackgroundColor:const Color(0xfff5f5fa)),darkTheme:ThemeData(useMaterial3:true,brightness:Brightness.dark,colorSchemeSeed:Color(m.accent),scaffoldBackgroundColor:const Color(0xff080d16)),home:Gate(m:m)));}
-}
-void msg(BuildContext c,String s)=>ScaffoldMessenger.of(c).showSnackBar(SnackBar(content:Text(s)));
-Widget head(String a,String b)=>Padding(padding:const EdgeInsets.fromLTRB(20,18,20,12),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(a,style:const TextStyle(fontSize:30,fontWeight:FontWeight.w900)),Text(b,style:const TextStyle(color:Colors.grey))]));
+// ============================================================
+// HOME
+// ============================================================
 
-class Gate extends StatelessWidget{const Gate({super.key,required this.m});final Model m;@override Widget build(BuildContext c)=>StreamBuilder<User?>(stream:FirebaseAuth.instance.authStateChanges(),builder:(_,s)=>s.connectionState==ConnectionState.waiting?const Scaffold(body:Center(child:CircularProgressIndicator())):s.data==null?Login(m:m):Shell(m:m));}
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({
+    super.key,
+    required this.onThemeChanged,
+  });
 
-class Login extends StatefulWidget{const Login({super.key,required this.m});final Model m;@override State<Login>createState()=>_LoginState();}
-class _LoginState extends State<Login>{final e=TextEditingController(),p=TextEditingController(),n=TextEditingController();bool reg=false,busy=false;String err='';
-  Future<void> submit()async{setState(()=>busy=true);try{if(reg){final r=await FirebaseAuth.instance.createUserWithEmailAndPassword(email:e.text.trim(),password:p.text);await r.user!.updateDisplayName(n.text.trim());await FirebaseFirestore.instance.collection('users').doc(r.user!.uid).set({'uid':r.user!.uid,'name':n.text.trim(),'email':e.text.trim().toLowerCase(),'createdAt':FieldValue.serverTimestamp()});}else{await FirebaseAuth.instance.signInWithEmailAndPassword(email:e.text.trim(),password:p.text);}}on FirebaseAuthException catch(x){err=x.message??x.code;}finally{if(mounted)setState(()=>busy=false);}}
-  @override Widget build(BuildContext c)=>Scaffold(body:Center(child:SingleChildScrollView(padding:const EdgeInsets.all(24),child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:430),child:Column(children:[Container(width:82,height:82,decoration:BoxDecoration(gradient:LinearGradient(colors:[Theme.of(c).colorScheme.primary,Theme.of(c).colorScheme.tertiary]),borderRadius:BorderRadius.circular(26)),child:const Icon(Icons.shield_rounded,size:44,color:Colors.white)),const SizedBox(height:15),const Text('WATCHKEEPER',style:TextStyle(fontSize:34,fontWeight:FontWeight.w900)),const Text('Remember more • Miss less • Stay connected'),const SizedBox(height:28),if(reg)...[TextField(controller:n,decoration:const InputDecoration(labelText:'Your name',border:OutlineInputBorder())),const SizedBox(height:12)],TextField(controller:e,decoration:const InputDecoration(labelText:'Email',border:OutlineInputBorder())),const SizedBox(height:12),TextField(controller:p,obscureText:true,decoration:const InputDecoration(labelText:'Password',border:OutlineInputBorder())),if(err.isNotEmpty)Padding(padding:const EdgeInsets.all(10),child:Text(err,style:TextStyle(color:Theme.of(c).colorScheme.error))),SizedBox(width:double.infinity,child:FilledButton(onPressed:busy?null:submit,child:Padding(padding:const EdgeInsets.all(14),child:Text(reg?'Create account':'Sign in')))),TextButton(onPressed:()=>setState(()=>reg=!reg),child:Text(reg?'Already registered? Sign in':'Create WATCHKEEPER account')),if(!reg)TextButton(onPressed:()async{if(e.text.trim().isEmpty){msg(c,'Enter your email first.');return;}await FirebaseAuth.instance.sendPasswordResetEmail(email:e.text.trim());if(c.mounted)msg(c,'Reset email sent.');},child:const Text('Forgot password?'))]))))));
+  final ValueChanged<ThemeMode> onThemeChanged;
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class Shell extends StatelessWidget{const Shell({super.key,required this.m});final Model m;@override Widget build(BuildContext c){final pages=[Home(m:m),Planner(m:m),Connect(m:m),Moments(m:m),More(m:m)];return Scaffold(body:SafeArea(child:pages[m.tab]),bottomNavigationBar:NavigationBar(selectedIndex:m.tab,onDestinationSelected:m.go,destinations:const[NavigationDestination(icon:Icon(Icons.home_outlined),label:'Home'),NavigationDestination(icon:Icon(Icons.event_note_outlined),label:'Planner'),NavigationDestination(icon:Icon(Icons.forum_outlined),label:'Connect'),NavigationDestination(icon:Icon(Icons.photo_library_outlined),label:'Moments'),NavigationDestination(icon:Icon(Icons.tune),label:'More')]),floatingActionButton:m.tab<2?FloatingActionButton.extended(onPressed:()=>createItem(c,m),icon:const Icon(Icons.add),label:const Text('Create')):null);}}
+class _HomeScreenState extends State<HomeScreen> {
+  int page = 0;
 
-class Home extends StatelessWidget{const Home({super.key,required this.m});final Model m;@override Widget build(BuildContext c){final u=FirebaseAuth.instance.currentUser,open=m.tasks.where((x)=>x['done']!=true).length;return ListView(padding:const EdgeInsets.only(bottom:100),children:[head('Good ${DateTime.now().hour<12?'morning':DateTime.now().hour<18?'afternoon':'evening'}${u?.displayName?.isNotEmpty==true?', ${u!.displayName}':''}',DateFormat('EEEE, d MMMM').format(DateTime.now())),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Container(padding:const EdgeInsets.all(22),decoration:BoxDecoration(gradient:LinearGradient(colors:[Theme.of(c).colorScheme.primary,Theme.of(c).colorScheme.tertiary]),borderRadius:BorderRadius.circular(30)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Row(children:[const Icon(Icons.radar,color:Colors.white),const SizedBox(width:8),const Expanded(child:Text('DEPARTURE GUARD',style:TextStyle(color:Colors.white,fontWeight:FontWeight.w900))),Switch(value:m.guard,onChanged:(_)=>m.toggleGuard(c))]),const SizedBox(height:18),Text(m.guard?'Watching your departure':'Ready when you leave',style:const TextStyle(color:Colors.white,fontSize:26,fontWeight:FontWeight.w900)),Text('$open unfinished • ${m.radius.round()} m Safe Zone',style:const TextStyle(color:Colors.white70)),const SizedBox(height:12),FilledButton.tonalIcon(onPressed:()=>m.toggleGuard(c),icon:Icon(m.guard?Icons.stop_circle:Icons.shield),label:Text(m.guard?'Disarm':'Arm Guard'))]))),const Padding(padding:EdgeInsets.fromLTRB(20,25,20,8),child:Text('Up next',style:TextStyle(fontSize:22,fontWeight:FontWeight.w900))),if(m.tasks.isEmpty&&m.events.isEmpty)const Empty(icon:Icons.auto_awesome,title:'Your life, not fake activity',sub:'Create your own tasks and events.')else ...[...m.tasks.where((x)=>x['done']!=true).take(3).map((x)=>TaskRow(m:m,x:x)),...m.events.take(2).map((x)=>EventRow(m:m,x:x))],Padding(padding:const EdgeInsets.all(20),child:Card(child:ListTile(leading:const CircleAvatar(child:Icon(Icons.forum)),title:const Text('WATCHKEEPER Connect',style:TextStyle(fontWeight:FontWeight.w800)),subtitle:const Text('Message other WATCHKEEPER users.'),trailing:const Icon(Icons.chevron_right),onTap:()=>m.go(2))))]);}}
+  @override
+  Widget build(BuildContext context) {
+    final pages = [
+      const DashboardPage(),
+      const TasksPage(),
+      const EventsPage(),
+      MorePage(onThemeChanged: widget.onThemeChanged),
+    ];
 
-class Planner extends StatefulWidget{const Planner({super.key,required this.m});final Model m;@override State<Planner>createState()=>_PlannerState();}
-class _PlannerState extends State<Planner>{int seg=0;@override Widget build(BuildContext c)=>Column(children:[head('Planner','Tasks, events and timed reminders'),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:SegmentedButton<int>(segments:const[ButtonSegment(value:0,label:Text('Tasks')),ButtonSegment(value:1,label:Text('Events'))],selected:{seg},onSelectionChanged:(x)=>setState(()=>seg=x.first))),const SizedBox(height:10),Expanded(child:seg==0?(widget.m.tasks.isEmpty?const Empty(icon:Icons.task_alt,title:'No tasks yet',sub:'Tap Create to add one.'):ListView(children:widget.m.tasks.map((x)=>TaskRow(m:widget.m,x:x)).toList())):(widget.m.events.isEmpty?const Empty(icon:Icons.event,title:'No events yet',sub:'Add appointments, work, travel or family events.'):ListView(children:widget.m.events.map((x)=>EventRow(m:widget.m,x:x)).toList()))) ]);}
+    return Scaffold(
+      body: SafeArea(child: pages[page]),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: page,
+        onDestinationSelected: (value) {
+          setState(() => page = value);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.checklist),
+            label: 'Tasks',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.calendar_month_outlined),
+            selectedIcon: Icon(Icons.calendar_month),
+            label: 'Events',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.more_horiz),
+            label: 'More',
+          ),
+        ],
+      ),
+      floatingActionButton: page == 1 || page == 2
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                showCreateItem(
+                  context,
+                  initialType: page == 1 ? 'Task' : 'Event',
+                );
+              },
+              icon: const Icon(Icons.add),
+              label: Text(page == 1 ? 'New task' : 'New event'),
+            )
+          : null,
+    );
+  }
+}
 
-class TaskRow extends StatelessWidget{const TaskRow({super.key,required this.m,required this.x});final Model m;final Map<String,dynamic>x;@override Widget build(BuildContext c)=>Padding(padding:const EdgeInsets.symmetric(horizontal:20,vertical:4),child:Card(child:CheckboxListTile(value:x['done']==true,onChanged:(v){x['done']=v??false;m.log('${x['title']} ${x['done']?'completed':'reopened'}');},title:Text(x['title']??'',style:const TextStyle(fontWeight:FontWeight.w800)),subtitle:Text('${x['category']} • ${x['label']}'),secondary:const CircleAvatar(child:Icon(Icons.task_alt)))));}
-class EventRow extends StatelessWidget{const EventRow({super.key,required this.m,required this.x});final Model m;final Map<String,dynamic>x;@override Widget build(BuildContext c)=>Padding(padding:const EdgeInsets.symmetric(horizontal:20,vertical:4),child:Card(child:ListTile(leading:const CircleAvatar(child:Icon(Icons.event)),title:Text(x['title']??'',style:const TextStyle(fontWeight:FontWeight.w800)),subtitle:Text('${x['category']} • ${x['label']}\\n${x['note']??''}'),isThreeLine:true,trailing:IconButton(icon:const Icon(Icons.delete_outline),onPressed:(){m.events.remove(x);m.log('${x['title']} deleted');}))));}
+// ============================================================
+// DASHBOARD
+// ============================================================
 
-Future<void> createItem(BuildContext c,Model m)async{String type='Task',cat='Personal';int before=10;DateTime day=DateTime.now();TimeOfDay time=TimeOfDay.fromDateTime(DateTime.now().add(const Duration(hours:1)));final title=TextEditingController(),note=TextEditingController();
-await showModalBottomSheet(context:c,isScrollControlled:true,showDragHandle:true,builder:(bc)=>StatefulBuilder(builder:(_,set)=>Padding(padding:EdgeInsets.fromLTRB(20,0,20,MediaQuery.of(bc).viewInsets.bottom+20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Create $type',style:const TextStyle(fontSize:27,fontWeight:FontWeight.w900)),const SizedBox(height:12),SegmentedButton<String>(segments:const[ButtonSegment(value:'Task',label:Text('Task')),ButtonSegment(value:'Event',label:Text('Event'))],selected:{type},onSelectionChanged:(x)=>set(()=>type=x.first)),const SizedBox(height:12),TextField(controller:title,autofocus:true,decoration:const InputDecoration(labelText:'What should WATCHKEEPER remember?',border:OutlineInputBorder())),const SizedBox(height:12),DropdownButtonFormField<String>(initialValue:cat,decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),items:['Personal','Work','Travel','Prayer','Shopping','Family','Health','Event'].map((x)=>DropdownMenuItem(value:x,child:Text(x))).toList(),onChanged:(x)=>cat=x!),const SizedBox(height:12),TextField(controller:note,maxLines:2,decoration:const InputDecoration(labelText:'Notes / checklist / what to carry',border:OutlineInputBorder())),const SizedBox(height:12),Row(children:[Expanded(child:OutlinedButton.icon(onPressed:()async{final d=await showDatePicker(context:bc,firstDate:DateTime.now(),lastDate:DateTime.now().add(const Duration(days:3650)),initialDate:day);if(d!=null)set(()=>day=d);},icon:const Icon(Icons.calendar_month),label:Text(DateFormat('d MMM y').format(day)))),const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:()async{final t=await showTimePicker(context:bc,initialTime:time);if(t!=null)set(()=>time=t);},icon:const Icon(Icons.schedule),label:Text(time.format(bc))))]),const SizedBox(height:12),DropdownButtonFormField<int>(initialValue:before,decoration:const InputDecoration(labelText:'Reminder',border:OutlineInputBorder()),items:[0,5,10,15,30,60,120].map((x)=>DropdownMenuItem(value:x,child:Text(x==0?'At the time':'$x minutes before'))).toList(),onChanged:(x)=>before=x!),const SizedBox(height:16),SizedBox(width:double.infinity,child:FilledButton.icon(icon:const Icon(Icons.notifications_active),label:Text('Save $type & reminder'),onPressed:()async{if(title.text.trim().isEmpty)return;final when=DateTime(day.year,day.month,day.day,time.hour,time.minute),id=DateTime.now().millisecondsSinceEpoch.remainder(2147483647);final x={'id':id,'title':title.text.trim(),'note':note.text.trim(),'category':cat,'when':when.toIso8601String(),'label':DateFormat('EEE d MMM • h:mm a').format(when),'before':before,'done':false};if(type=='Task'){m.tasks.insert(0,x);}else{m.events.insert(0,x);}await Alerts.i.schedule(id,title.text.trim(),when,before);m.log('$type ${title.text.trim()} created');if(bc.mounted)Navigator.pop(bc);})),]))))));}
+class DashboardPage extends StatelessWidget {
+  const DashboardPage({super.key});
 
-class Connect extends StatelessWidget{const Connect({super.key,required this.m});final Model m;@override Widget build(BuildContext c){final me=FirebaseAuth.instance.currentUser!;return Column(children:[head('Connect','Private WATCHKEEPER messaging'),Expanded(child:StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(stream:FirebaseFirestore.instance.collection('users').snapshots(),builder:(_,s){if(s.hasError)return Center(child:Text('Enable Firestore and publish the supplied rules.\\n${s.error}',textAlign:TextAlign.center));if(!s.hasData)return const Center(child:CircularProgressIndicator());final us=s.data!.docs.where((x)=>x.id!=me.uid).toList();if(us.isEmpty)return const Empty(icon:Icons.people_outline,title:'No other users yet',sub:'Another WATCHKEEPER account will appear here.');return ListView(children:us.map((d){final u=d.data();return ListTile(leading:CircleAvatar(child:Text((u['name']??'U').toString().substring(0,1).toUpperCase())),title:Text(u['name']??'User',style:const TextStyle(fontWeight:FontWeight.w800)),subtitle:Text(u['email']??''),trailing:const Icon(Icons.chat_bubble_outline),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>Chat(peer:d.id,name:u['name']??'User'))));}).toList());}))]);}}
-String cid(String a,String b){final x=[a,b]..sort();return '${x[0]}_${x[1]}';}
-class Chat extends StatefulWidget{const Chat({super.key,required this.peer,required this.name});final String peer,name;@override State<Chat>createState()=>_ChatState();}
-class _ChatState extends State<Chat>{final t=TextEditingController();Future<void>send()async{final s=t.text.trim();if(s.isEmpty)return;t.clear();final me=FirebaseAuth.instance.currentUser!,id=cid(me.uid,widget.peer),d=FirebaseFirestore.instance.collection('chats').doc(id);await d.set({'members':[me.uid,widget.peer],'lastMessage':s,'updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));await d.collection('messages').add({'senderId':me.uid,'text':s,'createdAt':FieldValue.serverTimestamp()});}
-@override Widget build(BuildContext c){final me=FirebaseAuth.instance.currentUser!,id=cid(me.uid,widget.peer);return Scaffold(appBar:AppBar(title:Text(widget.name)),body:Column(children:[Expanded(child:StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(stream:FirebaseFirestore.instance.collection('chats').doc(id).collection('messages').orderBy('createdAt',descending:true).limit(100).snapshots(),builder:(_,s){if(s.hasError)return Center(child:Text('${s.error}'));if(!s.hasData)return const Center(child:CircularProgressIndicator());return ListView(reverse:true,padding:const EdgeInsets.all(14),children:s.data!.docs.map((d){final x=d.data(),mine=x['senderId']==me.uid;return Align(alignment:mine?Alignment.centerRight:Alignment.centerLeft,child:Container(constraints:const BoxConstraints(maxWidth:300),margin:const EdgeInsets.symmetric(vertical:4),padding:const EdgeInsets.all(13),decoration:BoxDecoration(color:mine?Theme.of(c).colorScheme.primary:Theme.of(c).colorScheme.surfaceContainerHighest,borderRadius:BorderRadius.circular(19)),child:Text(x['text']??'',style:TextStyle(color:mine?Theme.of(c).colorScheme.onPrimary:null))));}).toList());})),SafeArea(top:false,child:Padding(padding:const EdgeInsets.all(10),child:Row(children:[Expanded(child:TextField(controller:t,onSubmitted:(_)=>send(),decoration:const InputDecoration(hintText:'Message…',border:OutlineInputBorder()))),const SizedBox(width:8),IconButton.filled(onPressed:send,icon:const Icon(Icons.send))]))) ]));}}
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
 
-class Moments extends StatelessWidget{const Moments({super.key,required this.m});final Model m;Future<void>pick(ImageSource src,bool video)async{final p=ImagePicker(),f=video?await p.pickVideo(source:src,maxDuration:const Duration(minutes:2)):await p.pickImage(source:src,imageQuality:82);if(f==null)return;m.memories.insert(0,{'path':f.path,'video':video,'time':DateTime.now().toIso8601String()});m.log('${video?'Video':'Photo'} moment saved');}
-@override Widget build(BuildContext c)=>Column(children:[head('Moments','A private visual memory wall'),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[Expanded(child:FilledButton.icon(onPressed:()=>pick(ImageSource.camera,false),icon:const Icon(Icons.photo_camera),label:const Text('Photo'))),const SizedBox(width:8),Expanded(child:FilledButton.tonalIcon(onPressed:()=>pick(ImageSource.camera,true),icon:const Icon(Icons.videocam),label:const Text('Video'))),IconButton(onPressed:()=>pick(ImageSource.gallery,false),icon:const Icon(Icons.photo_library))])),Expanded(child:m.memories.isEmpty?const Empty(icon:Icons.photo_camera_back_outlined,title:'Capture a moment',sub:'Save something you do not want to forget.'):GridView.builder(padding:const EdgeInsets.all(16),gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:2,crossAxisSpacing:10,mainAxisSpacing:10),itemCount:m.memories.length,itemBuilder:(_,i){final x=m.memories[i],v=x['video']==true,f=File(x['path']);return ClipRRect(borderRadius:BorderRadius.circular(22),child:Stack(fit:StackFit.expand,children:[if(!v&&f.existsSync())Image.file(f,fit:BoxFit.cover)else Container(color:Theme.of(c).colorScheme.surfaceContainerHighest,child:Icon(v?Icons.videocam:Icons.broken_image,size:50)),if(v)const Center(child:Icon(Icons.play_circle_fill,color:Colors.white,size:55))]));}))]);}
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text(
+          'WATCHKEEPER',
+          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          user?.displayName?.isNotEmpty == true
+              ? 'Hello, ${user!.displayName}'
+              : 'Your personal watchkeeper',
+        ),
+        const SizedBox(height: 24),
 
-class More extends StatelessWidget{const More({super.key,required this.m});final Model m;@override Widget build(BuildContext c){final u=FirebaseAuth.instance.currentUser!;return ListView(children:[head('More','Safety, style, account and diagnostics'),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Card(child:Column(children:[ListTile(leading:const CircleAvatar(child:Icon(Icons.person)),title:Text(u.displayName??'WATCHKEEPER user'),subtitle:Text(u.email??'')),ListTile(leading:const CircleAvatar(child:Icon(Icons.home)),title:const Text('Mark Home now'),subtitle:Text(m.homeLat==null?'Not marked':'Safe Zone ${m.radius.round()} m'),onTap:()async{final ok=await m.markHome();if(c.mounted)msg(c,ok?'Home marked':'Enable GPS and Location permission');}),ListTile(leading:const CircleAvatar(child:Icon(Icons.alarm)),title:const Text('Request exact-alarm access'),onTap:Alerts.i.exactPermission),ListTile(leading:const CircleAvatar(child:Icon(Icons.notification_add)),title:const Text('Test notification'),onTap:Alerts.i.test),ListTile(leading:const CircleAvatar(child:Icon(Icons.contact_phone)),title:const Text('Trusted contact'),subtitle:Text(m.phone.isEmpty?'Not configured':'${m.contact} • ${m.phone}'),onTap:()=>trusted(c,m))]))),Padding(padding:const EdgeInsets.all(20),child:Card(child:Padding(padding:const EdgeInsets.all(18),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Appearance',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),Wrap(spacing:8,children:['Auto','Light','Dark','Midnight'].map((x)=>ChoiceChip(label:Text(x),selected:m.theme==x,onSelected:(_){m.theme=x;m.save();})).toList()),const SizedBox(height:15),Wrap(spacing:10,children:[0xff6750a4,0xff0077b6,0xff00875a,0xffe85d04,0xffd63384].map((x)=>InkWell(onTap:(){m.accent=x;m.save();},child:Container(width:42,height:42,decoration:BoxDecoration(color:Color(x),shape:BoxShape.circle,border:Border.all(width:3,color:m.accent==x?Theme.of(c).colorScheme.onSurface:Colors.transparent))))).toList())])))),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Card(child:Column(children:[ListTile(leading:const Icon(Icons.history),title:Text('Activity history (${m.history.length})'),onTap:()=>showModalBottomSheet(context:c,showDragHandle:true,builder:(_)=>ListView(padding:const EdgeInsets.all(20),children:[const Text('Activity',style:TextStyle(fontSize:26,fontWeight:FontWeight.w900)),...m.history.map((x)=>ListTile(title:Text(x['text']??''),subtitle:Text(x['time']??'')))])),ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:FirebaseAuth.instance.signOut)]))) ]);}}
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.shield_rounded, size: 42),
+                const SizedBox(height: 14),
+                Text(
+                  'Stay prepared',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Create tasks and events and WATCHKEEPER will help you remember what matters.',
+                ),
+              ],
+            ),
+          ),
+        ),
 
-Future<void>trusted(BuildContext c,Model m)async{final n=TextEditingController(text:m.contact),p=TextEditingController(text:m.phone);await showDialog(context:c,builder:(x)=>AlertDialog(title:const Text('Trusted contact'),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(controller:n,decoration:const InputDecoration(labelText:'Name')),TextField(controller:p,keyboardType:TextInputType.phone,decoration:const InputDecoration(labelText:'Phone'))]),actions:[if(m.phone.isNotEmpty)TextButton(onPressed:()=>launchUrl(Uri(scheme:'tel',path:m.phone)),child:const Text('Call')),FilledButton(onPressed:(){m.contact=n.text.trim();m.phone=p.text.trim();m.log('Trusted contact updated');Navigator.pop(x);},child:const Text('Save'))]));}
-class Empty extends StatelessWidget{const Empty({super.key,required this.icon,required this.title,required this.sub});final IconData icon;final String title,sub;@override Widget build(BuildContext c)=>Center(child:Padding(padding:const EdgeInsets.all(35),child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(icon,size:60,color:Theme.of(c).colorScheme.primary),const SizedBox(height:12),Text(title,textAlign:TextAlign.center,style:const TextStyle(fontSize:21,fontWeight:FontWeight.w900)),Text(sub,textAlign:TextAlign.center,style:const TextStyle(color:Colors.grey))])));}
+        const SizedBox(height: 12),
+
+        Row(
+          children: [
+            Expanded(
+              child: _DashboardButton(
+                icon: Icons.add_task,
+                label: 'Add task',
+                onTap: () {
+                  showCreateItem(context, initialType: 'Task');
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _DashboardButton(
+                icon: Icons.event,
+                label: 'Add event',
+                onTap: () {
+                  showCreateItem(context, initialType: 'Event');
+                },
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 20),
+
+        Text(
+          'Upcoming',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+        ),
+
+        const SizedBox(height: 10),
+
+        const UpcomingItems(),
+      ],
+    );
+  }
+}
+
+class _DashboardButton extends StatelessWidget {
+  const _DashboardButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 20,
+          ),
+          child: Column(
+            children: [
+              Icon(icon, size: 32),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class UpcomingItems extends StatelessWidget {
+  const UpcomingItems({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('items')
+          .orderBy('when')
+          .limit(5)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const Text('Unable to load upcoming items.');
+        }
+
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snapshot.data!.docs.where((doc) {
+          final data = doc.data();
+          final stamp = data['when'];
+
+          if (stamp is! Timestamp) return false;
+
+          return stamp.toDate().isAfter(
+                DateTime.now().subtract(const Duration(minutes: 1)),
+              );
+        }).toList();
+
+        if (docs.isEmpty) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: Text(
+                'Nothing upcoming. Add a task or event.',
+              ),
+            ),
+          );
+        }
+
+        return Column(
+          children: docs.map((doc) {
+            return ItemTile(
+              document: doc,
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+}
+
+// ============================================================
+// TASKS
+// ============================================================
+
+class TasksPage extends StatelessWidget {
+  const TasksPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ItemListPage(
+      title: 'Tasks',
+      subtitle: 'Things WATCHKEEPER should remember for you',
+      type: 'Task',
+      emptyMessage: 'No tasks yet.',
+    );
+  }
+}
+
+// ============================================================
+// EVENTS
+// ============================================================
+
+class EventsPage extends StatelessWidget {
+  const EventsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ItemListPage(
+      title: 'Events',
+      subtitle: 'Appointments, work, family and important dates',
+      type: 'Event',
+      emptyMessage: 'No events yet.',
+    );
+  }
+}
+
+// ============================================================
+// ITEM LIST
+// ============================================================
+
+class ItemListPage extends StatelessWidget {
+  const ItemListPage({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.type,
+    required this.emptyMessage,
+  });
+
+  final String title;
+  final String subtitle;
+  final String type;
+  final String emptyMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    final query = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('items')
+        .where('type', isEqualTo: type);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+              Text(subtitle),
+            ],
+          ),
+        ),
+        Expanded(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: query.snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Center(
+                  child: Text('Unable to load $title.'),
+                );
+              }
+
+              if (!snapshot.hasData) {
+                return const Center(
+                  child: CircularProgressIndicator(),
+                );
+              }
+
+              final docs = snapshot.data!.docs.toList();
+
+              docs.sort((a, b) {
+                final aWhen = a.data()['when'];
+                final bWhen = b.data()['when'];
+
+                if (aWhen is! Timestamp || bWhen is! Timestamp) {
+                  return 0;
+                }
+
+                return aWhen.compareTo(bWhen);
+              });
+
+              if (docs.isEmpty) {
+                return Center(child: Text(emptyMessage));
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
+                itemCount: docs.length,
+                itemBuilder: (context, index) {
+                  return ItemTile(document: docs[index]);
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================
+// ITEM TILE
+// ============================================================
+
+class ItemTile extends StatelessWidget {
+  const ItemTile({
+    super.key,
+    required this.document,
+  });
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> document;
+
+  Future<void> deleteItem(BuildContext context) async {
+    final data = document.data();
+    final notificationId = data['notificationId'];
+
+    if (notificationId is int) {
+      await Alerts.instance.cancel(notificationId);
+    }
+
+    await document.reference.delete();
+
+    if (context.mounted) {
+      showMessage(context, 'Deleted.');
+    }
+  }
+
+  Future<void> toggleDone(bool value) async {
+    await document.reference.update({
+      'done': value,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = document.data();
+
+    final title = data['title']?.toString() ?? 'Untitled';
+    final note = data['note']?.toString() ?? '';
+    final category = data['category']?.toString() ?? 'Personal';
+    final done = data['done'] == true;
+
+    DateTime? when;
+
+    final stamp = data['when'];
+
+    if (stamp is Timestamp) {
+      when = stamp.toDate();
+    }
+
+    final dateText = when == null
+        ? ''
+        : DateFormat('EEE, d MMM y • h:mm a').format(when);
+
+    return Card(
+      child: ListTile(
+        leading: Checkbox(
+          value: done,
+          onChanged: (value) {
+            toggleDone(value ?? false);
+          },
+        ),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            decoration: done ? TextDecoration.lineThrough : null,
+          ),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (dateText.isNotEmpty) Text(dateText),
+            Text(category),
+            if (note.isNotEmpty) Text(note),
+          ],
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.delete_outline),
+          onPressed: () => deleteItem(context),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// CREATE TASK / EVENT
+// ============================================================
+
+Future<void> showCreateItem(
+  BuildContext context, {
+  required String initialType,
+}) async {
+  final titleController = TextEditingController();
+  final noteController = TextEditingController();
+
+  String type = initialType;
+  String category = 'Personal';
+  int minutesBefore = 10;
+
+  DateTime selectedDate = DateTime.now();
+  TimeOfDay selectedTime = TimeOfDay.now();
+
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              0,
+              20,
+              MediaQuery.of(context).viewInsets.bottom + 20,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Create $type',
+                    style: const TextStyle(
+                      fontSize: 27,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment<String>(
+                        value: 'Task',
+                        label: Text('Task'),
+                        icon: Icon(Icons.check_circle_outline),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'Event',
+                        label: Text('Event'),
+                        icon: Icon(Icons.event),
+                      ),
+                    ],
+                    selected: {type},
+                    onSelectionChanged: (selection) {
+                      setSheetState(() {
+                        type = selection.first;
+                      });
+                    },
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  TextField(
+                    controller: titleController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'What should WATCHKEEPER remember?',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  DropdownButtonFormField<String>(
+                    value: category,
+                    decoration: const InputDecoration(
+                      labelText: 'Category',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      'Personal',
+                      'Work',
+                      'Travel',
+                      'Prayer',
+                      'Shopping',
+                      'Family',
+                      'Health',
+                      'Event',
+                    ].map((value) {
+                      return DropdownMenuItem(
+                        value: value,
+                        child: Text(value),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setSheetState(() => category = value);
+                      }
+                    },
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  TextField(
+                    controller: noteController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes / checklist / what to carry',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.calendar_month),
+                          label: Text(
+                            DateFormat('d MMM y').format(selectedDate),
+                          ),
+                          onPressed: () async {
+                            final date = await showDatePicker(
+                              context: context,
+                              initialDate: selectedDate,
+                              firstDate: DateTime.now(),
+                              lastDate: DateTime.now().add(
+                                const Duration(days: 3650),
+                              ),
+                            );
+
+                            if (date != null) {
+                              setSheetState(() {
+                                selectedDate = date;
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.schedule),
+                          label: Text(selectedTime.format(context)),
+                          onPressed: () async {
+                            final time = await showTimePicker(
+                              context: context,
+                              initialTime: selectedTime,
+                            );
+
+                            if (time != null) {
+                              setSheetState(() {
+                                selectedTime = time;
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  DropdownButtonFormField<int>(
+                    value: minutesBefore,
+                    decoration: const InputDecoration(
+                      labelText: 'Reminder',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [0, 5, 10, 15, 30, 60, 120]
+                        .map(
+                          (minutes) => DropdownMenuItem(
+                            value: minutes,
+                            child: Text(
+                              minutes == 0
+                                  ? 'At the time'
+                                  : '$minutes minutes before',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setSheetState(() {
+                          minutesBefore = value;
+                        });
+                      }
+                    },
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.notifications_active),
+                      label: Text('Save $type & reminder'),
+                      onPressed: () async {
+                        final title = titleController.text.trim();
+
+                        if (title.isEmpty) {
+                          showMessage(context, 'Enter a title.');
+                          return;
+                        }
+
+                        final when = DateTime(
+                          selectedDate.year,
+                          selectedDate.month,
+                          selectedDate.day,
+                          selectedTime.hour,
+                          selectedTime.minute,
+                        );
+
+                        final id = DateTime.now()
+                            .millisecondsSinceEpoch
+                            .remainder(2147483647);
+
+                        final user = FirebaseAuth.instance.currentUser;
+
+                        if (user == null) return;
+
+                        try {
+                          await FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(user.uid)
+                              .collection('items')
+                              .add({
+                            'type': type,
+                            'title': title,
+                            'note': noteController.text.trim(),
+                            'category': category,
+                            'when': Timestamp.fromDate(when),
+                            'minutesBefore': minutesBefore,
+                            'notificationId': id,
+                            'done': false,
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+
+                          await Alerts.instance.schedule(
+                            id: id,
+                            title: title,
+                            when: when,
+                            minutesBefore: minutesBefore,
+                          );
+
+                          if (context.mounted) {
+                            Navigator.pop(context);
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            showMessage(
+                              context,
+                              'Could not save: $e',
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+
+  titleController.dispose();
+  noteController.dispose();
+}
+
+// ============================================================
+// MORE / SETTINGS
+// ============================================================
+
+class MorePage extends StatefulWidget {
+  const MorePage({
+    super.key,
+    required this.onThemeChanged,
+  });
+
+  final ValueChanged<ThemeMode> onThemeChanged;
+
+  @override
+  State<MorePage> createState() => _MorePageState();
+}
+
+class _MorePageState extends State<MorePage> {
+  double? homeLat;
+  double? homeLng;
+
+  String contactName = '';
+  String contactPhone = '';
+
+  @override
+  void initState() {
+    super.initState();
+    loadSettings();
+  }
+
+  Future<void> loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    if (!mounted) return;
+
+    setState(() {
+      homeLat = prefs.getDouble('homeLat');
+      homeLng = prefs.getDouble('homeLng');
+      contactName = prefs.getString('contactName') ?? '';
+      contactPhone = prefs.getString('contactPhone') ?? '';
+    });
+  }
+
+  Future<void> markHome() async {
+    try {
+      var permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          showMessage(
+            context,
+            'Please enable Location permission.',
+          );
+        }
+        return;
+      }
+
+      final enabled = await Geolocator.isLocationServiceEnabled();
+
+      if (!enabled) {
+        if (mounted) {
+          showMessage(context, 'Please turn on GPS.');
+        }
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition();
+
+      final prefs = await SharedPreferences.getInstance();
+
+      await prefs.setDouble('homeLat', position.latitude);
+      await prefs.setDouble('homeLng', position.longitude);
+
+      if (!mounted) return;
+
+      setState(() {
+        homeLat = position.latitude;
+        homeLng = position.longitude;
+      });
+
+      showMessage(context, 'Home safe zone marked.');
+    } catch (e) {
+      if (mounted) {
+        showMessage(context, 'Could not mark home: $e');
+      }
+    }
+  }
+
+  Future<void> configureTrustedContact() async {
+    final nameController = TextEditingController(text: contactName);
+    final phoneController = TextEditingController(text: contactPhone);
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Trusted contact'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                ),
+              ),
+              TextField(
+                controller: phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone number',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+
+                await prefs.setString(
+                  'contactName',
+                  nameController.text.trim(),
+                );
+
+                await prefs.setString(
+                  'contactPhone',
+                  phoneController.text.trim(),
+                );
+
+                if (!mounted) return;
+
+                setState(() {
+                  contactName = nameController.text.trim();
+                  contactPhone = phoneController.text.trim();
+                });
+
+                if (dialogContext.mounted) {
+                  Navigator.pop(dialogContext);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    nameController.dispose();
+    phoneController.dispose();
+  }
+
+  Future<void> callTrustedContact() async {
+    if (contactPhone.isEmpty) {
+      showMessage(context, 'Set your trusted contact first.');
+      return;
+    }
+
+    final uri = Uri(
+      scheme: 'tel',
+      path: contactPhone,
+    );
+
+    if (!await launchUrl(uri)) {
+      if (mounted) {
+        showMessage(context, 'Could not open phone dialer.');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text(
+          'More',
+          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w900,
+              ),
+        ),
+        const Text(
+          'Safety, appearance and account settings',
+        ),
+
+        const SizedBox(height: 20),
+
+        Card(
+          child: Column(
+            children: [
+              ListTile(
+                leading: const CircleAvatar(
+                  child: Icon(Icons.person),
+                ),
+                title: Text(
+                  user?.displayName?.isNotEmpty == true
+                      ? user!.displayName!
+                      : 'WATCHKEEPER user',
+                ),
+                subtitle: Text(user?.email ?? ''),
+              ),
+
+              const Divider(height: 1),
+
+              ListTile(
+                leading: const Icon(Icons.home),
+                title: const Text('Mark Home now'),
+                subtitle: Text(
+                  homeLat == null
+                      ? 'Home safe zone not configured'
+                      : 'Home safe zone configured',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: markHome,
+              ),
+
+              ListTile(
+                leading: const Icon(Icons.notification_add),
+                title: const Text('Test notification'),
+                onTap: Alerts.instance.test,
+              ),
+
+              ListTile(
+                leading: const Icon(Icons.contact_phone),
+                title: const Text('Trusted contact'),
+                subtitle: Text(
+                  contactPhone.isEmpty
+                      ? 'Not configured'
+                      : '$contactName • $contactPhone',
+                ),
+                onTap: configureTrustedContact,
+              ),
+
+              if (contactPhone.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.call),
+                  title: const Text('Call trusted contact'),
+                  onTap: callTrustedContact,
+                ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Appearance',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ActionChip(
+                      label: const Text('Auto'),
+                      onPressed: () {
+                        widget.onThemeChanged(ThemeMode.system);
+                      },
+                    ),
+                    ActionChip(
+                      label: const Text('Light'),
+                      onPressed: () {
+                        widget.onThemeChanged(ThemeMode.light);
+                      },
+                    ),
+                    ActionChip(
+                      label: const Text('Dark'),
+                      onPressed: () {
+                        widget.onThemeChanged(ThemeMode.dark);
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        Card(
+          child: Column(
+            children: [
+              const ListTile(
+                leading: Icon(Icons.cloud_done),
+                title: Text('Firebase'),
+                subtitle: Text(
+                  'Authentication and Cloud Firestore connected',
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text('Sign out'),
+                onTap: () async {
+                  await FirebaseAuth.instance.signOut();
+                },
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 30),
+
+        const Center(
+          child: Text(
+            'WATCHKEEPER 4',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+
+void showMessage(BuildContext context, String message) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+}

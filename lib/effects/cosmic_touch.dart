@@ -1,5 +1,186 @@
-import 'dart:math'; import 'package:flutter/material.dart';
-class CosmicTouch extends StatefulWidget{const CosmicTouch({super.key,required this.child});final Widget child;@override State<CosmicTouch> createState()=>_S();}
-class _Spark{_Spark(this.p,this.v,this.life);Offset p,v;double life;}
-class _S extends State<CosmicTouch> with SingleTickerProviderStateMixin{late final AnimationController c;final sparks=<_Spark>[];Offset? last;final r=Random();@override void initState(){super.initState();c=AnimationController(vsync:this,duration:const Duration(seconds:1))..addListener(_tick)..repeat();}@override void dispose(){c.dispose();super.dispose();}void _tick(){if(!mounted)return;setState((){for(final s in sparks){s.p+=s.v;s.v=Offset(s.v.dx*.96,s.v.dy*.96+.05);s.life-=.035;}sparks.removeWhere((s)=>s.life<=0);});}void burst(Offset p,{int n=12}){for(var i=0;i<n;i++){final a=r.nextDouble()*pi*2,sp=1+r.nextDouble()*4;sparks.add(_Spark(p,Offset(cos(a)*sp,sin(a)*sp),1));}}void trail(Offset p){if(last==null||(p-last!).distance>8){final v=last==null?Offset.zero:(last!-p)*.22;sparks.add(_Spark(p,v,1));last=p;}}@override Widget build(BuildContext context)=>Listener(onPointerDown:(e){burst(e.localPosition);last=e.localPosition;},onPointerMove:(e)=>trail(e.localPosition),onPointerUp:(_)=>last=null,child:Stack(fit:StackFit.expand,children:[widget.child,IgnorePointer(child:CustomPaint(painter:_Painter(sparks))) ]));}
-class _Painter extends CustomPainter{_Painter(this.s);final List<_Spark>s;@override void paint(Canvas c,Size z){for(final p in s){final glow=Paint()..color=const Color(0xFFFF6A2A).withValues(alpha:p.life*.18)..maskFilter=const MaskFilter.blur(BlurStyle.normal,9);c.drawCircle(p.p,8*p.life,glow);final core=Paint()..color=Color.lerp(const Color(0xFFFF3D00),const Color(0xFFFFF59D),1-p.life)!.withValues(alpha:p.life);c.drawCircle(p.p,2.2+3*p.life,core);}}@override bool shouldRepaint(covariant _Painter old)=>true;}
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+
+class CosmicTouch extends StatefulWidget {
+  const CosmicTouch({
+    super.key,
+    required this.child,
+  });
+
+  final Widget child;
+
+  @override
+  State<CosmicTouch> createState() => _CosmicTouchState();
+}
+
+class _Spark {
+  _Spark(this.position, this.velocity, this.life);
+
+  Offset position;
+  Offset velocity;
+  double life;
+}
+
+class _CosmicTouchState extends State<CosmicTouch>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController controller;
+
+  final List<_Spark> sparks = [];
+  final Random random = Random();
+
+  Offset? lastPosition;
+
+  @override
+  void initState() {
+    super.initState();
+
+    controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )
+      ..addListener(_tick)
+      ..repeat();
+  }
+
+  void _tick() {
+    for (final spark in sparks) {
+      spark.position += spark.velocity;
+      spark.velocity = Offset(
+        spark.velocity.dx * .96,
+        spark.velocity.dy * .96 + .05,
+      );
+      spark.life -= .035;
+    }
+
+    sparks.removeWhere((spark) => spark.life <= 0);
+  }
+
+  void _burst(
+    Offset position, {
+    int count = 12,
+  }) {
+    for (var i = 0; i < count; i++) {
+      final angle = random.nextDouble() * pi * 2;
+      final speed = 1 + random.nextDouble() * 4;
+
+      sparks.add(
+        _Spark(
+          position,
+          Offset(
+            cos(angle) * speed,
+            sin(angle) * speed,
+          ),
+          1,
+        ),
+      );
+    }
+  }
+
+  void _trail(Offset position) {
+    if (lastPosition == null ||
+        (position - lastPosition!).distance > 8) {
+      final velocity = lastPosition == null
+          ? Offset.zero
+          : (lastPosition! - position) * .22;
+
+      sparks.add(
+        _Spark(
+          position,
+          velocity,
+          1,
+        ),
+      );
+
+      lastPosition = position;
+    }
+  }
+
+  @override
+  void dispose() {
+    controller.removeListener(_tick);
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        _burst(event.localPosition);
+        lastPosition = event.localPosition;
+      },
+      onPointerMove: (event) {
+        _trail(event.localPosition);
+      },
+      onPointerUp: (_) {
+        lastPosition = null;
+      },
+      onPointerCancel: (_) {
+        lastPosition = null;
+      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          widget.child,
+          IgnorePointer(
+            child: CustomPaint(
+              painter: _CosmicPainter(
+                sparks: sparks,
+                repaint: controller,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CosmicPainter extends CustomPainter {
+  _CosmicPainter({
+    required this.sparks,
+    required Listenable repaint,
+  }) : super(repaint: repaint);
+
+  final List<_Spark> sparks;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final spark in sparks) {
+      final glow = Paint()
+        ..color = const Color(0xFFFF6A2A)
+            .withValues(alpha: spark.life * .18)
+        ..maskFilter = const MaskFilter.blur(
+          BlurStyle.normal,
+          9,
+        );
+
+      canvas.drawCircle(
+        spark.position,
+        8 * spark.life,
+        glow,
+      );
+
+      final core = Paint()
+        ..color = Color.lerp(
+          const Color(0xFFFF3D00),
+          const Color(0xFFFFF59D),
+          1 - spark.life,
+        )!
+            .withValues(alpha: spark.life);
+
+      canvas.drawCircle(
+        spark.position,
+        2.2 + 3 * spark.life,
+        core,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CosmicPainter oldDelegate) {
+    return true;
+  }
+}

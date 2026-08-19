@@ -1,1 +1,54 @@
-{"workflows":{"watchkeeper-5-android":{"name":"WATCHKEEPER 5 Premium Android APK","instance_type":"mac_mini_m2","max_build_duration":60,"environment":{"flutter":"stable"},"scripts":[{"name":"Recreate Android project","script":"rm -rf android test analysis_options.yaml\nflutter create --platforms=android --org com.abdallahkhalfan --project-name watchkeeper .\nrm -rf test\nrm -f analysis_options.yaml"},{"name":"Install Firebase configuration","script":"cp google-services.json android/app/google-services.json"},{"name":"Get Flutter packages","script":"flutter pub get"},{"name":"Analyze WATCHKEEPER","script":"flutter analyze --no-fatal-infos"},{"name":"Build WATCHKEEPER 5 APK","script":"flutter build apk --debug"}],"artifacts":["build/app/outputs/flutter-apk/*.apk"]}}}
+workflows:
+  watchkeeper-5-android:
+    name: WATCHKEEPER 5 Premium Android APK
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      flutter: stable
+
+    scripts:
+      - name: Recreate Android project
+        script: |
+          set -e
+          echo "=== Recreate Android project ==="
+          pwd
+          rm -rf android test analysis_options.yaml
+
+          flutter create \
+            --platforms=android \
+            --org com.abdallahkhalfan \
+            --project-name watchkeeper \
+            .
+
+          test -d android/app
+          echo "Android project created successfully"
+          ls -la android
+          ls -la android/app
+
+      - name: Install Firebase configuration
+        script: |
+          set -e
+          echo "=== Install Firebase configuration ==="
+          test -f google-services.json
+          test -d android/app
+          cp google-services.json android/app/google-services.json
+          test -f android/app/google-services.json
+          echo "Firebase config installed"
+
+      - name: Get Flutter packages
+        script: |
+          set -e
+          flutter pub get
+
+      - name: Analyze WATCHKEEPER
+        script: |
+          flutter analyze --no-fatal-infos
+
+      - name: Build WATCHKEEPER 5 APK
+        script: |
+          set -e
+          flutter build apk --debug
+
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk

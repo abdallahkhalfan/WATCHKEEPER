@@ -1,326 +1,101 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:url_launcher/url_launcher.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const Watchkeeper());
+  await Alerts.I.init();
+  runApp(const WatchkeeperApp());
 }
 
-class Store extends ChangeNotifier {
-  Store._();
-  static final Store I = Store._();
-  SharedPreferences? p;
-  int tab = 0;
-  String theme = 'Auto';
-  int accent = 0xFF6257E8;
-  List<Map<String,dynamic>> tasks = [];
-  List<Map<String,dynamic>> events = [];
-  List<Map<String,dynamic>> memories = [];
-  List<Map<String,dynamic>> activity = [];
-  List<Map<String,String>> chat = [
-    {'who':'buddy','text':'Hi — I’m WATCHKEEPER Buddy. Try “add task buy milk”, “add event wedding”, or ask “what is today?”'}
-  ];
-
-  Future<void> load() async {
-    p = await SharedPreferences.getInstance();
-    theme = p!.getString('theme3') ?? 'Auto';
-    accent = p!.getInt('accent3') ?? 0xFF6257E8;
-    tasks = _read('tasks3');
-    events = _read('events3');
-    memories = _read('memories3');
-    activity = _read('activity3');
-    notifyListeners();
+class Alerts {
+  Alerts._(); static final I = Alerts._();
+  final p = FlutterLocalNotificationsPlugin();
+  bool exact = false;
+  Future<void> init() async {
+    tz.initializeTimeZones();
+    try { final z = await FlutterTimezone.getLocalTimezone(); tz.setLocalLocation(tz.getLocation(z.name)); } catch (_) {}
+    const init = InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher'));
+    await p.initialize(settings: init);
+    final a = p.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await a?.requestNotificationsPermission();
+    exact = await a?.requestExactAlarmsPermission() ?? false;
   }
-  List<Map<String,dynamic>> _read(String k) {
-    try { return List<Map<String,dynamic>>.from(jsonDecode(p!.getString(k) ?? '[]')); } catch (_) { return []; }
+  NotificationDetails get details => const NotificationDetails(android: AndroidNotificationDetails(
+    'watchkeeper_alarms','WATCHKEEPER reminders',channelDescription:'Tasks, events and departure alerts',
+    importance:Importance.max,priority:Priority.max,playSound:true,enableVibration:true));
+  Future<void> now(String title,String body) => p.show(id:DateTime.now().millisecondsSinceEpoch.remainder(1000000),title:title,body:body,notificationDetails:details);
+  Future<void> schedule(int id,String title,String body,DateTime when) async {
+    if (!when.isAfter(DateTime.now())) return;
+    final mode = exact ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle;
+    await p.zonedSchedule(id:id,title:title,body:body,scheduledDate:tz.TZDateTime.from(when,tz.local),notificationDetails:details,androidScheduleMode:mode,payload:'wk:$id');
   }
-  Future<void> save() async {
-    await p?.setString('tasks3', jsonEncode(tasks));
-    await p?.setString('events3', jsonEncode(events));
-    await p?.setString('memories3', jsonEncode(memories));
-    await p?.setString('activity3', jsonEncode(activity));
-    await p?.setString('theme3', theme);
-    await p?.setInt('accent3', accent);
-    notifyListeners();
-  }
-  void go(int i){ tab=i; notifyListeners(); }
-  void log(String s){ activity.insert(0, {'text':s,'time':DateTime.now().toIso8601String()}); save(); }
+  Future<void> cancel(int id) => p.cancel(id:id);
 }
 
-class Watchkeeper extends StatefulWidget {
-  const Watchkeeper({super.key});
-  @override State<Watchkeeper> createState()=>_WatchkeeperState();
-}
-class _WatchkeeperState extends State<Watchkeeper> {
-  bool ready=false;
-  @override void initState(){super.initState(); Store.I.load().then((_){if(mounted)setState(()=>ready=true);});}
-  @override Widget build(BuildContext context){
-    if(!ready) return const MaterialApp(home:Scaffold(body:Center(child:CircularProgressIndicator())));
-    return AnimatedBuilder(animation:Store.I,builder:(context,_){
-      final s=Store.I, c=Color(s.accent);
-      final mode=s.theme=='Dark'||s.theme=='Midnight'?ThemeMode.dark:s.theme=='Light'?ThemeMode.light:ThemeMode.system;
-      return MaterialApp(debugShowCheckedModeBanner:false,themeMode:mode,
-        theme:ThemeData(useMaterial3:true,colorSchemeSeed:c,brightness:Brightness.light,scaffoldBackgroundColor:const Color(0xfff6f7fb)),
-        darkTheme:ThemeData(useMaterial3:true,colorSchemeSeed:c,brightness:Brightness.dark,scaffoldBackgroundColor:const Color(0xff10131a)),
-        home:Shell(key:ValueKey('${s.theme}-${s.accent}')));
-    });
-  }
+class WatchkeeperApp extends StatefulWidget { const WatchkeeperApp({super.key}); @override State<WatchkeeperApp> createState()=>_WatchkeeperAppState(); }
+class _WatchkeeperAppState extends State<WatchkeeperApp>{ final s=Store(); bool ready=false; @override void initState(){super.initState();s.load().then((_){if(mounted)setState(()=>ready=true);});}
+  @override Widget build(BuildContext context){ if(!ready)return const MaterialApp(home:Scaffold(body:Center(child:CircularProgressIndicator())));
+    return AnimatedBuilder(animation:s,builder:(_,__) { final c=Color(s.accent); final mode=s.theme=='Light'?ThemeMode.light:(s.theme=='Dark'||s.theme=='Midnight'?ThemeMode.dark:ThemeMode.system);
+      return MaterialApp(debugShowCheckedModeBanner:false,title:'WATCHKEEPER 4',themeMode:mode,
+        theme:ThemeData(useMaterial3:true,colorSchemeSeed:c,brightness:Brightness.light,scaffoldBackgroundColor:const Color(0xfff4f6fb),cardTheme:const CardThemeData(elevation:0,margin:EdgeInsets.zero)),
+        darkTheme:ThemeData(useMaterial3:true,colorSchemeSeed:c,brightness:Brightness.dark,scaffoldBackgroundColor:s.theme=='Midnight'?const Color(0xff050912):const Color(0xff0b111b),cardTheme:const CardThemeData(elevation:0,margin:EdgeInsets.zero)),home:Shell(s:s));});}}
+
+class Store extends ChangeNotifier{
+  SharedPreferences? p; int tab=0; String theme='Auto'; int accent=0xff6750e8; bool notifications=true; List<Map<String,dynamic>> items=[],memories=[],activity=[]; double? homeLat,homeLng; double radius=50; bool guard=false; String contactName='',contactPhone=''; StreamSubscription<Position>? stream; bool triggered=false;
+  final chat=<Map<String,String>>[{'who':'buddy','text':'I’m ready. Try “remind me to carry charger tomorrow at 7:00”, “add task passport”, or “what is next?”'}];
+  Future<void> load()async{p=await SharedPreferences.getInstance();theme=p!.getString('theme')??'Auto';accent=p!.getInt('accent')??0xff6750e8;notifications=p!.getBool('notifications')??true;homeLat=p!.getDouble('homeLat');homeLng=p!.getDouble('homeLng');radius=p!.getDouble('radius')??50;contactName=p!.getString('contactName')??'';contactPhone=p!.getString('contactPhone')??'';items=_list('items');memories=_list('memories');activity=_list('activity');notifyListeners();}
+  List<Map<String,dynamic>> _list(String k){try{return (jsonDecode(p!.getString(k)??'[]') as List).map((e)=>Map<String,dynamic>.from(e)).toList();}catch(_){return[];}}
+  Future<void> save()async{await p?.setString('theme',theme);await p?.setInt('accent',accent);await p?.setBool('notifications',notifications);await p?.setDouble('radius',radius);if(homeLat!=null)await p?.setDouble('homeLat',homeLat!);if(homeLng!=null)await p?.setDouble('homeLng',homeLng!);await p?.setString('contactName',contactName);await p?.setString('contactPhone',contactPhone);await p?.setString('items',jsonEncode(items));await p?.setString('memories',jsonEncode(memories));await p?.setString('activity',jsonEncode(activity.take(150).toList()));notifyListeners();}
+  void go(int x){tab=x;notifyListeners();} void log(String x){activity.insert(0,{'text':x,'time':DateTime.now().toIso8601String()});save();}
+  Future<void> addItem(Map<String,dynamic> x)async{items.add(x);await scheduleItem(x);log('${x['kind']} created: ${x['title']}');await save();}
+  Future<void> scheduleItem(Map<String,dynamic>x)async{if(!notifications)return;final when=DateTime.tryParse(x['when']??'');if(when==null)return;final lead=(x['lead']??10) as int;await Alerts.I.cancel(x['id']);await Alerts.I.schedule(x['id'],'${x['kind']} • ${x['title']}','Due ${fmt(when)}${x['note'].toString().isEmpty?'':' • ${x['note']}'}',when.subtract(Duration(minutes:lead)));}
+  Future<bool> locate()async{if(!await Geolocator.isLocationServiceEnabled())return false;var q=await Geolocator.checkPermission();if(q==LocationPermission.denied)q=await Geolocator.requestPermission();return q!=LocationPermission.denied&&q!=LocationPermission.deniedForever;}
+  Future<bool> markHome()async{if(!await locate())return false;final x=await Geolocator.getCurrentPosition(locationSettings:const LocationSettings(accuracy:LocationAccuracy.high));homeLat=x.latitude;homeLng=x.longitude;log('Home Safe Zone marked');await save();return true;}
+  Future<void> toggleGuard(BuildContext c)async{if(guard){await stream?.cancel();guard=false;log('Departure Guard disarmed');notifyListeners();return;}if(homeLat==null&&!await markHome()){snack(c,'Enable GPS and allow location first.');return;}guard=true;triggered=false;log('Departure Guard armed');stream=Geolocator.getPositionStream(locationSettings:const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:10)).listen((pos){final d=Geolocator.distanceBetween(homeLat!,homeLng!,pos.latitude,pos.longitude);if(d>radius&&!triggered){triggered=true;final pending=items.where((e)=>e['done']!=true&&e['protect']==true).length;Alerts.I.now('WATCHKEEPER Departure Guard',pending>0?'You left your Safe Zone with $pending unchecked essential item(s).':'You have left your Home Safe Zone.');log('Safe Zone exit detected • ${d.round()} m');}});notifyListeners();}
 }
 
-class Shell extends StatelessWidget {
-  const Shell({super.key});
-  @override Widget build(BuildContext context){
-    final s=Store.I;
-    final pages=[const Home(),const Planner(),const Buddy(),const Memories(),const Settings()];
-    return Scaffold(
-      body:SafeArea(child:pages[s.tab]),
-      bottomNavigationBar:NavigationBar(selectedIndex:s.tab,onDestinationSelected:s.go,destinations:const[
-        NavigationDestination(icon:Icon(Icons.home_outlined),selectedIcon:Icon(Icons.home_rounded),label:'Home'),
-        NavigationDestination(icon:Icon(Icons.calendar_month_outlined),selectedIcon:Icon(Icons.calendar_month),label:'Planner'),
-        NavigationDestination(icon:Icon(Icons.auto_awesome_outlined),selectedIcon:Icon(Icons.auto_awesome),label:'Buddy'),
-        NavigationDestination(icon:Icon(Icons.photo_library_outlined),selectedIcon:Icon(Icons.photo_library),label:'Memories'),
-        NavigationDestination(icon:Icon(Icons.tune),label:'Style'),
-      ]),
-      floatingActionButton:s.tab<2?FloatingActionButton.extended(onPressed:()=>showCreate(context),icon:const Icon(Icons.add),label:Text(s.tab==1?'Add':'Quick add')):null,
-    );
-  }
-}
+String fmt(DateTime d){final h=d.hour%12==0?12:d.hour%12;return '${d.day}/${d.month} • $h:${d.minute.toString().padLeft(2,'0')} ${d.hour>=12?'PM':'AM'}';}
+void snack(BuildContext c,String x)=>ScaffoldMessenger.of(c).showSnackBar(SnackBar(content:Text(x)));
 
-Widget title(String a,String b)=>Padding(padding:const EdgeInsets.fromLTRB(20,18,20,8),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-  Text(a,style:const TextStyle(fontSize:32,fontWeight:FontWeight.w900,letterSpacing:-1)),
-  const SizedBox(height:4),Text(b,style:const TextStyle(fontSize:15,color:Colors.grey))
-]));
+class Shell extends StatelessWidget{const Shell({super.key,required this.s});final Store s;@override Widget build(BuildContext c){final pages=[Home(s:s),Planner(s:s),Buddy(s:s),Memories(s:s),More(s:s)];return Scaffold(body:SafeArea(child:IndexedStack(index:s.tab,children:pages)),bottomNavigationBar:NavigationBar(selectedIndex:s.tab,onDestinationSelected:s.go,destinations:const[
+  NavigationDestination(icon:Icon(Icons.home_outlined),selectedIcon:Icon(Icons.home_rounded),label:'Home'),NavigationDestination(icon:Icon(Icons.calendar_month_outlined),selectedIcon:Icon(Icons.calendar_month),label:'Planner'),NavigationDestination(icon:Icon(Icons.auto_awesome_outlined),selectedIcon:Icon(Icons.auto_awesome),label:'Buddy'),NavigationDestination(icon:Icon(Icons.photo_library_outlined),selectedIcon:Icon(Icons.photo_library),label:'Moments'),NavigationDestination(icon:Icon(Icons.grid_view_rounded),label:'More')]),floatingActionButton:s.tab==0||s.tab==1?FloatingActionButton.extended(onPressed:()=>editItem(c,s),icon:const Icon(Icons.add),label:const Text('Create')):null);}}
 
-class Home extends StatelessWidget{
-  const Home({super.key});
-  @override Widget build(BuildContext context){
-    final s=Store.I; final pending=s.tasks.where((e)=>e['done']!=true).length;
-    return ListView(padding:const EdgeInsets.only(bottom:110),children:[
-      title('WATCHKEEPER','Your day. Your things. Your moments.'),
-      Padding(padding:const EdgeInsets.all(20),child:Container(padding:const EdgeInsets.all(24),decoration:BoxDecoration(
-        gradient:LinearGradient(colors:[Theme.of(context).colorScheme.primary,Theme.of(context).colorScheme.tertiary]),
-        borderRadius:BorderRadius.circular(30)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-          const Icon(Icons.shield_moon_rounded,color:Colors.white,size:38),const SizedBox(height:18),
-          const Text('Departure Guard',style:TextStyle(color:Colors.white,fontSize:25,fontWeight:FontWeight.w900)),
-          Text('$pending unfinished task${pending==1?'':'s'} before you leave',style:const TextStyle(color:Colors.white70,fontSize:16)),
-          const SizedBox(height:18),FilledButton.tonalIcon(onPressed:()=>s.log('Departure Guard checked'),icon:const Icon(Icons.radar),label:const Text('Check my readiness'))
-      ]))),
-      Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[
-        Expanded(child:_quick(context,Icons.task_alt,'Task','Create anything',()=>showCreate(context,kind:'Task'))),
-        const SizedBox(width:12),
-        Expanded(child:_quick(context,Icons.event_available,'Event','Plan a moment',()=>showCreate(context,kind:'Event'))),
-      ])),
-      Padding(padding:const EdgeInsets.fromLTRB(20,24,20,10),child:Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
-        const Text('Today',style:TextStyle(fontSize:23,fontWeight:FontWeight.w900)),
-        TextButton(onPressed:()=>s.go(1),child:const Text('Open planner'))
-      ])),
-      if(s.tasks.isEmpty&&s.events.isEmpty) const Empty(icon:Icons.add_circle_outline,title:'Nothing is pre-filled',sub:'Add your own tasks and events. WATCHKEEPER starts with your life, not fake activity.'),
-      ...s.tasks.take(3).map((e)=>TaskTile(e:e)),
-      ...s.events.take(2).map((e)=>EventTile(e:e)),
-      Padding(padding:const EdgeInsets.fromLTRB(20,20,20,0),child:Card(child:ListTile(
-        leading:const Icon(Icons.auto_awesome),title:const Text('Ask WATCHKEEPER Buddy',style:TextStyle(fontWeight:FontWeight.bold)),
-        subtitle:const Text('Create reminders using simple chat commands.'),trailing:const Icon(Icons.chevron_right),onTap:()=>s.go(2)))),
-    ]);
-  }
-  Widget _quick(BuildContext c,IconData i,String a,String b,VoidCallback f)=>InkWell(onTap:f,borderRadius:BorderRadius.circular(24),child:Ink(
-    padding:const EdgeInsets.all(20),decoration:BoxDecoration(color:Theme.of(c).colorScheme.surface,borderRadius:BorderRadius.circular(24)),
-    child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Icon(i,size:30,color:Theme.of(c).colorScheme.primary),const SizedBox(height:25),Text(a,style:const TextStyle(fontSize:20,fontWeight:FontWeight.w900)),Text(b,style:const TextStyle(color:Colors.grey))])));
-}
+Widget heading(String a,String b)=>Padding(padding:const EdgeInsets.fromLTRB(20,22,20,16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(a,style:const TextStyle(fontSize:31,fontWeight:FontWeight.w900,letterSpacing:-1)),const SizedBox(height:4),Text(b,style:const TextStyle(color:Colors.grey,fontSize:15))]));
 
-class Planner extends StatefulWidget{const Planner({super.key});@override State<Planner> createState()=>_PlannerState();}
-class _PlannerState extends State<Planner>{
-  int seg=0;
-  @override Widget build(BuildContext context){final s=Store.I;
-    return Column(children:[title('Planner','Unlimited tasks and real events'),
-      Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:SegmentedButton<int>(segments:const[
-        ButtonSegment(value:0,label:Text('Tasks'),icon:Icon(Icons.check_circle_outline)),
-        ButtonSegment(value:1,label:Text('Events'),icon:Icon(Icons.event_outlined)),
-      ],selected:{seg},onSelectionChanged:(v)=>setState(()=>seg=v.first))),
-      const SizedBox(height:10),
-      Expanded(child:seg==0
-        ?(s.tasks.isEmpty?const Empty(icon:Icons.task_alt,title:'No tasks yet',sub:'Tap Add and create your first task.'):ListView(children:s.tasks.map((e)=>TaskTile(e:e)).toList()))
-        :(s.events.isEmpty?const Empty(icon:Icons.event,title:'No events yet',sub:'Add weddings, work shifts, travel, birthdays or any custom event.'):ListView(children:s.events.map((e)=>EventTile(e:e)).toList())))
-    ]);
-  }
-}
+class Home extends StatelessWidget{const Home({super.key,required this.s});final Store s;@override Widget build(BuildContext c){final pending=s.items.where((e)=>e['done']!=true).length;final next=s.items.where((e)=>e['done']!=true&&DateTime.tryParse(e['when']??'')?.isAfter(DateTime.now())==true).toList()..sort((a,b)=>a['when'].compareTo(b['when']));return ListView(padding:const EdgeInsets.only(bottom:110),children:[
+  heading('WATCHKEEPER','Remember better. Leave ready. Keep the moments.'),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Container(padding:const EdgeInsets.all(24),decoration:BoxDecoration(gradient:LinearGradient(colors:[Theme.of(c).colorScheme.primary,Theme.of(c).colorScheme.tertiary]),borderRadius:BorderRadius.circular(30)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Row(children:[const Icon(Icons.shield_rounded,color:Colors.white,size:36),const Spacer(),Chip(label:Text(s.guard?'ARMED':'OFF'))]),const SizedBox(height:18),const Text('Departure Guard',style:TextStyle(color:Colors.white,fontSize:26,fontWeight:FontWeight.w900)),Text('$pending unfinished item${pending==1?'':'s'} • Safe Zone ${s.homeLat==null?'not set':'${s.radius.round()} m'}',style:const TextStyle(color:Colors.white70)),const SizedBox(height:18),FilledButton.tonalIcon(onPressed:()=>s.toggleGuard(c),icon:Icon(s.guard?Icons.stop_circle_outlined:Icons.radar),label:Text(s.guard?'Disarm guard':'Arm guard'))]))),
+  Padding(padding:const EdgeInsets.fromLTRB(20,18,20,0),child:Row(children:[Expanded(child:Quick(icon:Icons.task_alt_rounded,title:'Task',sub:'Anything to do',tap:()=>editItem(c,s,kind:'Task'))),const SizedBox(width:12),Expanded(child:Quick(icon:Icons.event_available_rounded,title:'Event',sub:'Plan a moment',tap:()=>editItem(c,s,kind:'Event')))])),
+  Padding(padding:const EdgeInsets.fromLTRB(20,12,20,0),child:Row(children:[Expanded(child:Quick(icon:Icons.camera_alt_rounded,title:'Capture',sub:'Photo memory',tap:(){s.go(3);})),const SizedBox(width:12),Expanded(child:Quick(icon:Icons.auto_awesome,title:'Buddy',sub:'Tell it naturally',tap:(){s.go(2);}))])),
+  Padding(padding:const EdgeInsets.fromLTRB(20,25,20,10),child:Row(children:[const Text('Up next',style:TextStyle(fontSize:23,fontWeight:FontWeight.w900)),const Spacer(),TextButton(onPressed:()=>s.go(1),child:const Text('See planner'))])),
+  if(next.isEmpty)const Padding(padding:EdgeInsets.symmetric(horizontal:20),child:Empty(text:'Nothing upcoming. Tap Create and make WATCHKEEPER yours.')) else ...next.take(3).map((e)=>ItemCard(s:s,e:e)),
+  Padding(padding:const EdgeInsets.all(20),child:Card(child:ListTile(contentPadding:const EdgeInsets.all(18),leading:const CircleAvatar(child:Icon(Icons.notifications_active)),title:Text(Alerts.I.exact?'Precise alarms ready':'Standard reminders ready',style:const TextStyle(fontWeight:FontWeight.w800)),subtitle:Text(Alerts.I.exact?'Exact Android alarm access is enabled.':'Exact alarm access is off; reminders use Android inexact scheduling.'),trailing:IconButton(onPressed:()=>Alerts.I.now('WATCHKEEPER test','Your notifications, sound and vibration channel is working.'),icon:const Icon(Icons.play_arrow_rounded))))) ]);}}
 
-class TaskTile extends StatelessWidget{
-  final Map<String,dynamic> e; const TaskTile({super.key,required this.e});
-  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(horizontal:20,vertical:6),child:Card(child:CheckboxListTile(
-    value:e['done']==true,onChanged:(v){e['done']=v;Store.I.log('${e['title']} ${v==true?'completed':'reopened'}');},
-    title:Text(e['title']??'',style:const TextStyle(fontWeight:FontWeight.w800)),
-    subtitle:Text([e['category'],e['when'],e['priority']].where((x)=>x!=null&&x.toString().isNotEmpty).join(' • ')),
-    secondary:CircleAvatar(child:Icon(iconFor(e['category']))))));
-}
-class EventTile extends StatelessWidget{
-  final Map<String,dynamic> e; const EventTile({super.key,required this.e});
-  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(horizontal:20,vertical:6),child:Card(child:ListTile(
-    leading:CircleAvatar(child:Icon(iconFor(e['category']))),title:Text(e['title']??'',style:const TextStyle(fontWeight:FontWeight.w800)),
-    subtitle:Text('${e['date']??''}${(e['time']??'').isEmpty?'':' • ${e['time']}'}\n${e['note']??''}'),isThreeLine:(e['note']??'').isNotEmpty,
-    trailing:PopupMenuButton(itemBuilder:(_)=>const[PopupMenuItem(value:'delete',child:Text('Delete'))],onSelected:(v){Store.I.events.remove(e);Store.I.log('${e['title']} deleted');})
-  )));
-}
+class Quick extends StatelessWidget{const Quick({super.key,required this.icon,required this.title,required this.sub,required this.tap});final IconData icon;final String title,sub;final VoidCallback tap;@override Widget build(BuildContext c)=>InkWell(onTap:tap,borderRadius:BorderRadius.circular(24),child:Ink(padding:const EdgeInsets.all(18),decoration:BoxDecoration(color:Theme.of(c).colorScheme.surfaceContainer,borderRadius:BorderRadius.circular(24)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Icon(icon,color:Theme.of(c).colorScheme.primary,size:29),const SizedBox(height:18),Text(title,style:const TextStyle(fontWeight:FontWeight.w900,fontSize:18)),Text(sub,style:const TextStyle(color:Colors.grey))])));}
+class Empty extends StatelessWidget{const Empty({super.key,required this.text});final String text;@override Widget build(BuildContext c)=>Container(padding:const EdgeInsets.all(24),decoration:BoxDecoration(color:Theme.of(c).colorScheme.surfaceContainer,borderRadius:BorderRadius.circular(24)),child:Row(children:[const Icon(Icons.inbox_outlined),const SizedBox(width:12),Expanded(child:Text(text))]));}
 
-IconData iconFor(dynamic c){switch(c){case'Work':return Icons.work_rounded;case'Travel':return Icons.flight_takeoff;case'Prayer':return Icons.self_improvement;case'Shopping':return Icons.shopping_bag;case'Family':return Icons.family_restroom;case'Health':return Icons.favorite;default:return Icons.star_rounded;}}
+class Planner extends StatefulWidget{const Planner({super.key,required this.s});final Store s;@override State<Planner> createState()=>_PlannerState();}class _PlannerState extends State<Planner>{String filter='All';@override Widget build(BuildContext c){final s=widget.s;final list=s.items.where((e)=>filter=='All'||e['kind']==filter).toList()..sort((a,b)=>(a['when']??'').compareTo(b['when']??''));return Column(children:[heading('Planner','Tasks, events, alarms and preparation'),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:SegmentedButton<String>(segments:const [ButtonSegment(value:'All',label:Text('All')),ButtonSegment(value:'Task',label:Text('Tasks')),ButtonSegment(value:'Event',label:Text('Events'))],selected:{filter},onSelectionChanged:(x)=>setState(()=>filter=x.first))),const SizedBox(height:12),Expanded(child:list.isEmpty?const Padding(padding:EdgeInsets.all(20),child:Empty(text:'No items yet. Create a task or event.')):ListView.builder(padding:const EdgeInsets.fromLTRB(20,0,20,110),itemCount:list.length,itemBuilder:(_,i)=>ItemCard(s:s,e:list[i])))]);}}
 
-class Buddy extends StatefulWidget{const Buddy({super.key});@override State<Buddy> createState()=>_BuddyState();}
-class _BuddyState extends State<Buddy>{
-  final ctl=TextEditingController();
-  void send(){
-    final t=ctl.text.trim(); if(t.isEmpty)return;
-    Store.I.chat.add({'who':'me','text':t}); ctl.clear();
-    final low=t.toLowerCase(); String reply;
-    if(low.startsWith('add task ')){
-      final x=t.substring(9).trim(); Store.I.tasks.insert(0,{'title':x,'category':'Personal','when':'Anytime','priority':'Normal','done':false});
-      Store.I.log('$x created from Buddy'); reply='Done. I added “$x” to your tasks.';
-    }else if(low.startsWith('add event ')){
-      final x=t.substring(10).trim(); Store.I.events.insert(0,{'title':x,'category':'Event','date':'Not set','time':'','note':'Created with Buddy'});
-      Store.I.log('$x event created from Buddy'); reply='Added “$x”. Open Planner to set its date and details.';
-    }else if(low.contains('what')&&(low.contains('today')||low.contains('task'))){
-      final n=Store.I.tasks.where((e)=>e['done']!=true).length; reply='You currently have $n unfinished task${n==1?'':'s'} and ${Store.I.events.length} event${Store.I.events.length==1?'':'s'}.';
-    }else{
-      reply='I can create things locally. Try “add task carry passport”, “add event baby shower”, or “what are my tasks?”.';
-    }
-    Store.I.chat.add({'who':'buddy','text':reply}); Store.I.save(); setState((){});
-  }
-  @override Widget build(BuildContext context)=>Column(children:[
-    title('Buddy','A private, offline WATCHKEEPER command chat'),
-    Expanded(child:ListView(padding:const EdgeInsets.all(16),children:Store.I.chat.map((m){final me=m['who']=='me';return Align(alignment:me?Alignment.centerRight:Alignment.centerLeft,child:Container(
-      constraints:const BoxConstraints(maxWidth:310),margin:const EdgeInsets.symmetric(vertical:5),padding:const EdgeInsets.all(14),
-      decoration:BoxDecoration(color:me?Theme.of(context).colorScheme.primary:Theme.of(context).colorScheme.surfaceContainerHighest,borderRadius:BorderRadius.circular(20)),
-      child:Text(m['text']!,style:TextStyle(color:me?Theme.of(context).colorScheme.onPrimary:null))));}).toList())),
-    SafeArea(top:false,child:Padding(padding:const EdgeInsets.all(12),child:Row(children:[Expanded(child:TextField(controller:ctl,onSubmitted:(_)=>send(),decoration:const InputDecoration(hintText:'Tell WATCHKEEPER something…',border:OutlineInputBorder()))),const SizedBox(width:8),IconButton.filled(onPressed:send,icon:const Icon(Icons.send_rounded))])))
-  ]);
-}
+class ItemCard extends StatelessWidget{const ItemCard({super.key,required this.s,required this.e});final Store s;final Map<String,dynamic> e;@override Widget build(BuildContext c){final d=DateTime.tryParse(e['when']??'');return Padding(padding:const EdgeInsets.fromLTRB(20,0,20,10),child:Card(child:ListTile(contentPadding:const EdgeInsets.all(14),leading:Checkbox(value:e['done']==true,onChanged:(v){e['done']=v;s.log('${e['title']} ${v==true?'completed':'reopened'}');s.save();}),title:Text(e['title'],style:TextStyle(fontWeight:FontWeight.w900,decoration:e['done']==true?TextDecoration.lineThrough:null)),subtitle:Text('${e['kind']} • ${d==null?'No time':fmt(d)} • ${e['lead']} min before${e['protect']==true?'\nDeparture essential':''}'),isThreeLine:e['protect']==true,trailing:PopupMenuButton<String>(onSelected:(v)async{if(v=='edit')editItem(c,s,existing:e);if(v=='delete'){await Alerts.I.cancel(e['id']);s.items.remove(e);s.log('${e['title']} deleted');s.save();}},itemBuilder:(_)=>const [PopupMenuItem(value:'edit',child:Text('Edit')),PopupMenuItem(value:'delete',child:Text('Delete'))]))));}}
 
-class Memories extends StatelessWidget{
-  const Memories({super.key});
-  Future<void> capture(BuildContext context,ImageSource src,bool video) async{
-    final p=ImagePicker(); final XFile? f=video?await p.pickVideo(source:src,maxDuration:const Duration(minutes:2)):await p.pickImage(source:src,imageQuality:82);
-    if(f==null)return;
-    Store.I.memories.insert(0,{'path':f.path,'video':video,'caption':video?'Video memory':'Photo memory','time':DateTime.now().toIso8601String()});
-    Store.I.log('${video?'Video':'Photo'} memory captured');
-  }
-  @override Widget build(BuildContext context){final s=Store.I;return Column(children:[
-    title('Memories','Capture what you do not want to forget'),
-    Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[
-      Expanded(child:FilledButton.icon(onPressed:()=>capture(context,ImageSource.camera,false),icon:const Icon(Icons.photo_camera),label:const Text('Photo'))),
-      const SizedBox(width:8),Expanded(child:FilledButton.tonalIcon(onPressed:()=>capture(context,ImageSource.camera,true),icon:const Icon(Icons.videocam),label:const Text('Video'))),
-      const SizedBox(width:8),IconButton.filledTonal(onPressed:()=>capture(context,ImageSource.gallery,false),icon:const Icon(Icons.photo_library))
-    ])),const SizedBox(height:12),
-    Expanded(child:s.memories.isEmpty?const Empty(icon:Icons.photo_camera_back_outlined,title:'Your memory wall is empty',sub:'Take a photo, record a short video, or choose a picture from your phone.'):GridView.builder(
-      padding:const EdgeInsets.all(16),gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:2,crossAxisSpacing:10,mainAxisSpacing:10),itemCount:s.memories.length,itemBuilder:(c,i){
-        final m=s.memories[i], video=m['video']==true, path=m['path'] as String;
-        return ClipRRect(borderRadius:BorderRadius.circular(22),child:Stack(fit:StackFit.expand,children:[
-          if(!video&&File(path).existsSync()) Image.file(File(path),fit:BoxFit.cover) else Container(color:Theme.of(c).colorScheme.surfaceContainerHighest,child:Icon(video?Icons.play_circle:Icons.broken_image,size:50)),
-          Align(alignment:Alignment.bottomCenter,child:Container(width:double.infinity,padding:const EdgeInsets.all(10),color:Colors.black54,child:Text(m['caption']??'Memory',style:const TextStyle(color:Colors.white,fontWeight:FontWeight.bold))))
-        ]));
-      }))
-  ]);}
-}
+Future<void> editItem(BuildContext c,Store s,{String kind='Task',Map<String,dynamic>? existing})async{final title=TextEditingController(text:existing?['title']??'');final note=TextEditingController(text:existing?['note']??'');String k=existing?['kind']??kind;int lead=existing?['lead']??10;bool protect=existing?['protect']??false;DateTime when=DateTime.tryParse(existing?['when']??'')??DateTime.now().add(const Duration(hours:1));
+ await showModalBottomSheet(context:c,isScrollControlled:true,useSafeArea:true,builder:(ctx)=>StatefulBuilder(builder:(ctx,set)=>Padding(padding:EdgeInsets.fromLTRB(20,20,20,MediaQuery.of(ctx).viewInsets.bottom+20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Row(children:[Text(existing==null?'Create':'Edit',style:const TextStyle(fontSize:26,fontWeight:FontWeight.w900)),const Spacer(),IconButton(onPressed:()=>Navigator.pop(ctx),icon:const Icon(Icons.close))]),SegmentedButton<String>(segments:const [ButtonSegment(value:'Task',label:Text('Task')),ButtonSegment(value:'Event',label:Text('Event'))],selected:{k},onSelectionChanged:(x)=>set(()=>k=x.first)),const SizedBox(height:16),TextField(controller:title,decoration:const InputDecoration(labelText:'Title',border:OutlineInputBorder())),const SizedBox(height:12),TextField(controller:note,maxLines:2,decoration:const InputDecoration(labelText:'Notes / what to remember',border:OutlineInputBorder())),const SizedBox(height:12),ListTile(tileColor:Theme.of(ctx).colorScheme.surfaceContainer,borderRadius:BorderRadius.circular(16),leading:const Icon(Icons.schedule),title:Text(fmt(when)),subtitle:const Text('Date & time'),onTap:()async{final d=await showDatePicker(context:ctx,firstDate:DateTime.now().subtract(const Duration(days:1)),lastDate:DateTime.now().add(const Duration(days:3650)),initialDate:when);if(d==null)return;final t=await showTimePicker(context:ctx,initialTime:TimeOfDay.fromDateTime(when));if(t!=null)set(()=>when=DateTime(d.year,d.month,d.day,t.hour,t.minute));}),const SizedBox(height:12),DropdownButtonFormField<int>(initialValue:lead,decoration:const InputDecoration(labelText:'Remind me',border:OutlineInputBorder()),items:[0,5,10,15,30,60,120,1440].map((x)=>DropdownMenuItem(value:x,child:Text(x==0?'At exact time':x==1440?'1 day before':'$x minutes before'))).toList(),onChanged:(x)=>set(()=>lead=x??10)),SwitchListTile(value:protect,onChanged:(x)=>set(()=>protect=x),title:const Text('Departure essential'),subtitle:const Text('Departure Guard checks this before you leave')),const SizedBox(height:12),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:()async{if(title.text.trim().isEmpty){snack(ctx,'Add a title first.');return;}final x=existing??{};x.addAll({'id':existing?['id']??DateTime.now().millisecondsSinceEpoch.remainder(2000000000),'title':title.text.trim(),'note':note.text.trim(),'kind':k,'when':when.toIso8601String(),'lead':lead,'protect':protect,'done':existing?['done']??false});if(existing==null)await s.addItem(x);else{await s.scheduleItem(x);s.log('${x['title']} updated');await s.save();}if(ctx.mounted)Navigator.pop(ctx);},icon:const Icon(Icons.alarm_add),label:Text(existing==null?'Save & schedule reminder':'Update reminder')))])))));}
 
-class Settings extends StatelessWidget{
-  const Settings({super.key});
-  static const accents=[0xFF6257E8,0xFF0077B6,0xFF00875A,0xFFE85D04,0xFFD63384,0xFF263238];
-  @override Widget build(BuildContext context){final s=Store.I;return ListView(children:[
-    title('Style & Settings','Make WATCHKEEPER look like yours'),
-    Padding(
-      padding: const EdgeInsets.all(20),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Theme', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                children: ['Auto', 'Light', 'Dark', 'Midnight']
-                    .map((x) => ChoiceChip(
-                          label: Text(x),
-                          selected: s.theme == x,
-                          onSelected: (_) {
-                            s.theme = x;
-                            s.save();
-                          },
-                        ))
-                    .toList(),
-              ),
-              const SizedBox(height: 22),
-              const Text('Accent colour', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                children: accents
-                    .map((x) => InkWell(
-                          onTap: () {
-                            s.accent = x;
-                            s.save();
-                          },
-                          child: Container(
-                            width: 42,
-                            height: 42,
-                            decoration: BoxDecoration(
-                              color: Color(x),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: s.accent == x
-                                    ? Theme.of(context).colorScheme.onSurface
-                                    : Colors.transparent,
-                                width: 3,
-                              ),
-                            ),
-                          ),
-                        ))
-                    .toList(),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-    Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Card(child:Column(children:[
-      const ListTile(leading:Icon(Icons.home_work_outlined),title:Text('Home Safe Zone'),subtitle:Text('Departure protection and geofence settings')),
-      const Divider(height:1),const ListTile(leading:Icon(Icons.contact_phone_outlined),title:Text('Emergency contact'),subtitle:Text('Escalation contact for Departure Guard')),
-      const Divider(height:1),ListTile(leading:const Icon(Icons.history),title:const Text('Real activity'),subtitle:Text('${s.activity.length} actions recorded'))
-    ]))),
-    Padding(padding:const EdgeInsets.all(20),child:Text('WATCHKEEPER 3.0 • Tasks • Events • Buddy • Memories • Themes',textAlign:TextAlign.center,style:const TextStyle(color:Colors.grey)))
-  ]);}
-}
+class Buddy extends StatefulWidget{const Buddy({super.key,required this.s});final Store s;@override State<Buddy> createState()=>_BuddyState();}class _BuddyState extends State<Buddy>{final t=TextEditingController();Future<void> send()async{final q=t.text.trim();if(q.isEmpty)return;t.clear();widget.s.chat.add({'who':'me','text':q});final low=q.toLowerCase();String reply='I can create reminders, open the planner, show what is next, and help you prepare.';if(low.contains('what')&&(low.contains('next')||low.contains('today'))){final a=widget.s.items.where((e)=>e['done']!=true).toList();reply=a.isEmpty?'You have nothing unfinished.':'You have ${a.length} unfinished item(s). Next: ${a.first['title']}.';}else if(low.startsWith('add task ')||low.startsWith('remind me ')){final name=low.startsWith('add task ')?q.substring(9):q.replaceFirst(RegExp('remind me ',caseSensitive:false),'');final x={'id':DateTime.now().millisecondsSinceEpoch.remainder(2000000000),'title':name,'note':'Created by Buddy','kind':'Task','when':DateTime.now().add(const Duration(hours:1)).toIso8601String(),'lead':10,'protect':false,'done':false};await widget.s.addItem(x);reply='Done — I created “$name”. Open Planner to set the exact date, time and alarm.';}widget.s.chat.add({'who':'buddy','text':reply});widget.s.notifyListeners();setState((){});} @override Widget build(BuildContext c)=>Column(children:[heading('WATCHKEEPER Buddy','A quick companion that turns words into action'),Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:20),children:widget.s.chat.map((m)=>Align(alignment:m['who']=='me'?Alignment.centerRight:Alignment.centerLeft,child:Container(margin:const EdgeInsets.only(bottom:10),padding:const EdgeInsets.all(14),constraints:const BoxConstraints(maxWidth:310),decoration:BoxDecoration(color:m['who']=='me'?Theme.of(c).colorScheme.primaryContainer:Theme.of(c).colorScheme.surfaceContainer,borderRadius:BorderRadius.circular(20)),child:Text(m['text']!)))).toList())),Padding(padding:const EdgeInsets.all(14),child:Row(children:[Expanded(child:TextField(controller:t,onSubmitted:(_)=>send(),decoration:const InputDecoration(hintText:'Tell Buddy what you need...',border:OutlineInputBorder()))),const SizedBox(width:8),IconButton.filled(onPressed:send,icon:const Icon(Icons.send))]))]);}
 
-class Empty extends StatelessWidget{
-  final IconData icon; final String title,sub; const Empty({super.key,required this.icon,required this.title,required this.sub});
-  @override Widget build(BuildContext context)=>Center(child:Padding(padding:const EdgeInsets.all(35),child:Column(mainAxisSize:MainAxisSize.min,children:[
-    Icon(icon,size:64,color:Theme.of(context).colorScheme.primary),const SizedBox(height:14),Text(title,textAlign:TextAlign.center,style:const TextStyle(fontSize:21,fontWeight:FontWeight.w900)),const SizedBox(height:6),Text(sub,textAlign:TextAlign.center,style:const TextStyle(color:Colors.grey,fontSize:15))
-  ])));
-}
+class Memories extends StatelessWidget{const Memories({super.key,required this.s});final Store s;Future<void> pick(BuildContext c,ImageSource src,bool video)async{final p=ImagePicker();final XFile? f=video?await p.pickVideo(source:src):await p.pickImage(source:src,imageQuality:85);if(f==null)return;s.memories.insert(0,{'path':f.path,'video':video,'time':DateTime.now().toIso8601String(),'caption':''});s.log('${video?'Video':'Photo'} memory captured');await s.save();}
+ @override Widget build(BuildContext c)=>Column(children:[heading('Moments','Private memories tied to your real life'),Padding(padding:const EdgeInsets.symmetric(horizontal:20),child:Row(children:[Expanded(child:FilledButton.icon(onPressed:()=>pick(c,ImageSource.camera,false),icon:const Icon(Icons.camera_alt),label:const Text('Photo'))),const SizedBox(width:8),Expanded(child:FilledButton.tonalIcon(onPressed:()=>pick(c,ImageSource.camera,true),icon:const Icon(Icons.videocam),label:const Text('Video'))),const SizedBox(width:8),IconButton.filledTonal(onPressed:()=>pick(c,ImageSource.gallery,false),icon:const Icon(Icons.photo_library))])),const SizedBox(height:15),Expanded(child:s.memories.isEmpty?const Padding(padding:EdgeInsets.all(20),child:Empty(text:'Capture something you do not want to forget.')):GridView.builder(padding:const EdgeInsets.fromLTRB(20,0,20,90),gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:2,crossAxisSpacing:10,mainAxisSpacing:10),itemCount:s.memories.length,itemBuilder:(_,i){final m=s.memories[i];return ClipRRect(borderRadius:BorderRadius.circular(22),child:Stack(fit:StackFit.expand,children:[m['video']==true?Container(color:Theme.of(c).colorScheme.surfaceContainer,child:const Icon(Icons.play_circle,size:55)):Image.file(File(m['path']),fit:BoxFit.cover,errorBuilder:(_,__,___)=>const Center(child:Icon(Icons.broken_image))),Positioned(right:5,top:5,child:IconButton.filledTonal(onPressed:(){s.memories.removeAt(i);s.save();},icon:const Icon(Icons.delete_outline)))]));}))]);}
 
-Future<void> showCreate(BuildContext context,{String? kind}) async{
-  String type=kind??'Task',category='Personal',priority='Normal'; final name=TextEditingController(),note=TextEditingController();
-  DateTime date=DateTime.now(); TimeOfDay time=TimeOfDay.now();
-  await showModalBottomSheet(context:context,isScrollControlled:true,showDragHandle:true,builder:(ctx)=>StatefulBuilder(builder:(ctx,set)=>Padding(
-    padding:EdgeInsets.fromLTRB(20,0,20,MediaQuery.of(ctx).viewInsets.bottom+20),child:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      Text('Create $type',style:const TextStyle(fontSize:27,fontWeight:FontWeight.w900)),
-      const SizedBox(height:14),SegmentedButton<String>(segments:const[ButtonSegment(value:'Task',label:Text('Task')),ButtonSegment(value:'Event',label:Text('Event'))],selected:{type},onSelectionChanged:(v)=>set(()=>type=v.first)),
-      const SizedBox(height:14),TextField(controller:name,autofocus:true,decoration:InputDecoration(labelText:type=='Task'?'What do you need to do?':'Event name',border:const OutlineInputBorder())),
-      const SizedBox(height:12),DropdownButtonFormField<String>(initialValue:category,decoration:const InputDecoration(labelText:'Category',border:OutlineInputBorder()),items:['Personal','Work','Travel','Prayer','Shopping','Family','Health','Event'].map((x)=>DropdownMenuItem(value:x,child:Text(x))).toList(),onChanged:(v)=>set(()=>category=v!)),
-      const SizedBox(height:12),if(type=='Task')DropdownButtonFormField<String>(initialValue:priority,decoration:const InputDecoration(labelText:'Priority',border:OutlineInputBorder()),items:['Low','Normal','High','Urgent'].map((x)=>DropdownMenuItem(value:x,child:Text(x))).toList(),onChanged:(v)=>priority=v!),
-      if(type=='Event')...[const SizedBox(height:12),TextField(controller:note,maxLines:2,decoration:const InputDecoration(labelText:'Notes / what to carry',border:OutlineInputBorder()))],
-      const SizedBox(height:12),Row(children:[
-        Expanded(child:OutlinedButton.icon(onPressed:()async{final d=await showDatePicker(context:ctx,firstDate:DateTime.now().subtract(const Duration(days:365)),lastDate:DateTime.now().add(const Duration(days:3650)),initialDate:date);if(d!=null)set(()=>date=d);},icon:const Icon(Icons.calendar_today),label:Text('${date.day}/${date.month}/${date.year}'))),
-        const SizedBox(width:8),Expanded(child:OutlinedButton.icon(onPressed:()async{final t=await showTimePicker(context:ctx,initialTime:time);if(t!=null)set(()=>time=t);},icon:const Icon(Icons.schedule),label:Text(time.format(ctx))))
-      ]),
-      const SizedBox(height:18),SizedBox(width:double.infinity,child:FilledButton.icon(onPressed:(){
-        final n=name.text.trim();if(n.isEmpty)return;
-        if(type=='Task')Store.I.tasks.insert(0,{'title':n,'category':category,'when':'${date.day}/${date.month} • ${time.format(ctx)}','priority':priority,'done':false});
-        else Store.I.events.insert(0,{'title':n,'category':category,'date':'${date.day}/${date.month}/${date.year}','time':time.format(ctx),'note':note.text.trim()});
-        Store.I.log('$type “$n” created');Navigator.pop(ctx);
-      },icon:const Icon(Icons.check),label:Text('Save $type'))),const SizedBox(height:8)
-    ]))
-  )));
-}
+class More extends StatelessWidget{const More({super.key,required this.s});final Store s;@override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.only(bottom:80),children:[heading('Control Center','Make WATCHKEEPER work your way'),Section(title:'Appearance',child:Column(children:[Wrap(spacing:8,runSpacing:8,children:['Auto','Light','Dark','Midnight'].map((x)=>ChoiceChip(label:Text(x),selected:s.theme==x,onSelected:(_){s.theme=x;s.save();})).toList()),const SizedBox(height:15),Wrap(spacing:12,children:[0xff6750e8,0xff087ea4,0xff008b67,0xffe85d04,0xffd62976,0xff37474f].map((x)=>InkWell(onTap:(){s.accent=x;s.save();},child:Container(width:44,height:44,decoration:BoxDecoration(color:Color(x),shape:BoxShape.circle,border:Border.all(color:s.accent==x?Theme.of(c).colorScheme.onSurface:Colors.transparent,width:3)))).toList())])),Section(title:'Reminders & alarms',child:Column(children:[SwitchListTile(value:s.notifications,onChanged:(v){s.notifications=v;s.save();},title:const Text('Notifications'),subtitle:const Text('Task and event reminder alerts')),ListTile(leading:const Icon(Icons.alarm),title:Text(Alerts.I.exact?'Exact alarms enabled':'Exact alarms not enabled'),subtitle:const Text('WATCHKEEPER falls back to inexact Android scheduling when needed'),trailing:IconButton(onPressed:()=>Alerts.I.now('WATCHKEEPER test alarm','Sound, vibration and notifications are working.'),icon:const Icon(Icons.play_arrow)))])),Section(title:'Departure & safety',child:Column(children:[ListTile(leading:const Icon(Icons.home_work_outlined),title:const Text('Home Safe Zone'),subtitle:Text(s.homeLat==null?'Not configured':'${s.radius.round()} m radius'),trailing:FilledButton.tonal(onPressed:()async{final ok=await s.markHome();if(c.mounted)snack(c,ok?'Home location saved.':'Enable GPS/location permission.');},child:const Text('Mark here'))),Slider(value:s.radius,min:20,max:500,divisions:24,label:'${s.radius.round()} m',onChanged:(v){s.radius=v;s.save();}),ListTile(leading:const Icon(Icons.contact_phone_outlined),title:const Text('Trusted contact'),subtitle:Text(s.contactPhone.isEmpty?'Not configured':'${s.contactName} • ${s.contactPhone}'),onTap:()=>contactDialog(c,s)),ListTile(leading:Icon(s.guard?Icons.radar:Icons.shield_outlined),title:Text(s.guard?'Departure Guard is armed':'Departure Guard is off'),trailing:Switch(value:s.guard,onChanged:(_)=>s.toggleGuard(c)))])),Section(title:'Activity & privacy',child:Column(children:[ListTile(leading:const Icon(Icons.history),title:Text('${s.activity.length} actions recorded'),subtitle:const Text('Stored locally on this device')),ListTile(leading:const Icon(Icons.lock_outline),title:const Text('Local-first data'),subtitle:const Text('Tasks, settings and activity stay on this phone in this build'))]))]);}
+
+class Section extends StatelessWidget{const Section({super.key,required this.title,required this.child});final String title;final Widget child;@override Widget build(BuildContext c)=>Padding(padding:const EdgeInsets.fromLTRB(20,0,20,16),child:Card(child:Padding(padding:const EdgeInsets.all(18),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(title,style:const TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:12),child]))));}
+Future<void> contactDialog(BuildContext c,Store s)async{final n=TextEditingController(text:s.contactName),p=TextEditingController(text:s.contactPhone);await showDialog(context:c,builder:(ctx)=>AlertDialog(title:const Text('Trusted contact'),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(controller:n,decoration:const InputDecoration(labelText:'Name')),TextField(controller:p,keyboardType:TextInputType.phone,decoration:const InputDecoration(labelText:'Phone'))]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),FilledButton(onPressed:(){s.contactName=n.text.trim();s.contactPhone=p.text.trim();s.log('Trusted contact updated');s.save();Navigator.pop(ctx);},child:const Text('Save')),if(s.contactPhone.isNotEmpty)IconButton(onPressed:()=>launchUrl(Uri.parse('tel:${s.contactPhone}')),icon:const Icon(Icons.call))]));}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "719625260804",
+    "project_id": "watchkeeper-b8812",
+    "storage_bucket": "watchkeeper-b8812.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:719625260804:android:747f43174e09ac46168a51",
+        "android_client_info": {
+          "package_name": "com.abdallahkhalfan.watchkeeper"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBEkhrBNMU4a6noAyTTFtZVZU4bSRrWFqw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

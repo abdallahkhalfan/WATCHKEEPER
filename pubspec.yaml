@@ -1,7 +1,8 @@
 name: watchkeeper
-description: WATCHKEEPER 4 - smart reminder, departure guard, planner, buddy and memories companion
+description: WATCHKEEPER 4 - Smart personal reminder, planner, safety, memories and communication companion
 publish_to: "none"
-version: 4.0.0+5
+
+version: 4.0.0+4
 
 environment:
   sdk: ">=3.10.0 <4.0.0"
@@ -9,13 +10,32 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  shared_preferences: ^2.5.5
-  flutter_local_notifications: ^22.3.0
-  timezone: ^0.11.1
-  flutter_timezone: ^5.1.0
-  geolocator: ^14.0.3
-  image_picker: ^1.2.3
+
+  # Local storage
+  shared_preferences: ^2.5.3
+
+  # Location / Safe Zone
+  geolocator: ^14.0.2
+
+  # Notifications and alarms
+  flutter_local_notifications: ^19.5.0
+  timezone: ^0.10.1
+  flutter_timezone: ^5.0.1
+
+  # Photos and videos
+  image_picker: ^1.2.0
+
+  # Links / calls
   url_launcher: ^6.3.2
+
+  # Firebase
+  firebase_core: ^4.1.0
+  firebase_auth: ^6.0.2
+  cloud_firestore: ^6.0.1
+
+  # UI
+  cupertino_icons: ^1.0.8
+  intl: ^0.20.2
 
 flutter:
   uses-material-design: true
